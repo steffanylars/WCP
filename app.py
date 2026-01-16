@@ -479,7 +479,7 @@ def crear_grafico_efectividad_zona(df: pd.DataFrame, key_suffix: str = "") -> go
                   annotation_text="Meta 65%", annotation_position="top")
     
     fig.update_layout(
-        title="Efectividad por Zona (Top 15)",
+        title="Efectividad por Zona",
         xaxis_title="Efectividad (%)",
         yaxis_title="Zona",
         height=500,
