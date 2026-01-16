@@ -453,39 +453,68 @@ def crear_grafico_status(df: pd.DataFrame, key_suffix: str = "") -> go.Figure:
 
 
 def crear_grafico_efectividad_zona(df: pd.DataFrame, key_suffix: str = "") -> go.Figure:
-    """Crea gráfico de barras de efectividad por zona - CORREGIDO"""
-    # Agrupar correctamente
+    """Crea gráfico de barras de efectividad por zona con barra deslizante"""
+
     efectividad_zona = df.groupby('GEO_KEY').agg(
         total=('ORDEN', 'count'),
         liquidados=('ES_LIQUIDADO', 'sum')
     ).reset_index()
-    
-    # Calcular efectividad correctamente
-    efectividad_zona['efectividad'] = (efectividad_zona['liquidados'] / efectividad_zona['total']) * 100
-    efectividad_zona = efectividad_zona.sort_values('efectividad', ascending=True)
-    
-    colors = ['#dc3545' if e < 65 else '#28a745' for e in efectividad_zona['efectividad']]
-    
+
+    efectividad_zona['efectividad'] = (
+        efectividad_zona['liquidados'] / efectividad_zona['total']
+    ) * 100
+
+    efectividad_zona = efectividad_zona.sort_values(
+        'efectividad', ascending=True
+    ).reset_index(drop=True)
+
+    n_zonas = len(efectividad_zona)
+    window_size = 15  # cuántas barras se muestran a la vez
+
+    start_idx = st.slider(
+        "Desliza para ver más zonas",
+        min_value=0,
+        max_value=max(0, n_zonas - window_size),
+        value=0,
+        step=1,
+        key=f"slider_zona_{key_suffix}"
+    )
+
+    zona_view = efectividad_zona.iloc[start_idx:start_idx + window_size]
+
+    colors = [
+        '#dc3545' if e < 65 else '#28a745'
+        for e in zona_view['efectividad']
+    ]
+
     fig = go.Figure(data=[go.Bar(
-        y=efectividad_zona['GEO_KEY'],
-        x=efectividad_zona['efectividad'],
+        y=zona_view['GEO_KEY'],
+        x=zona_view['efectividad'],
         orientation='h',
         marker_color=colors,
-        text=[f"{e:.1f}% ({int(t)})" for e, t in zip(efectividad_zona['efectividad'], efectividad_zona['total'])],
+        text=[
+            f"{e:.1f}% ({int(t)})"
+            for e, t in zip(zona_view['efectividad'], zona_view['total'])
+        ],
         textposition='outside'
     )])
-    
-    fig.add_vline(x=65, line_dash="dash", line_color="orange", 
-                  annotation_text="Meta 65%", annotation_position="top")
-    
+
+    fig.add_vline(
+        x=65,
+        line_dash="dash",
+        line_color="orange",
+        annotation_text="Meta 65%",
+        annotation_position="top"
+    )
+
     fig.update_layout(
-        title="Efectividad por Zona",
+        title=f"Efectividad por Zona (mostrando {start_idx + 1}–{min(start_idx + window_size, n_zonas)} de {n_zonas})",
         xaxis_title="Efectividad (%)",
         yaxis_title="Zona",
         height=500,
         margin=dict(l=200)
     )
-    
+
     return fig
 
 
@@ -1000,7 +1029,7 @@ def reporte_geografico(df: pd.DataFrame):
         
         fig.add_vline(x=65, line_dash="dash", line_color="orange", annotation_text="Meta 65%")
         fig.update_layout(
-            title="Efectividad por Zona (Top 15)",
+            title="Efectividad por Zona",
             xaxis_title="Efectividad (%)",
             height=500,
             margin=dict(l=200)
@@ -1044,17 +1073,6 @@ def reporte_geografico(df: pd.DataFrame):
         st.dataframe(efectividad_depto, use_container_width=True)
         descargar_csv(efectividad_depto, "efectividad_departamento.csv", key="download_efect_depto")
     
-    # Detalle de datos filtrados
-    st.subheader("📋 Detalle de Órdenes")
-    st.write(f"Mostrando **{len(df_filtrado):,}** órdenes")
-    
-    st.dataframe(
-        df_filtrado[['ORDEN', 'CLIENTE', 'STATUS', 'SUB STATUS', 'DEPARTAMENTO', 'GEO_KEY', 'EDAD_DIAS', 'VALOR_NUM']],
-        use_container_width=True,
-        height=300
-    )
-    descargar_csv(df_filtrado, "ordenes_filtradas_geo.csv", key="download_ordenes_geo")
-
 
 def reporte_productos(df: pd.DataFrame):
     """Reporte de análisis de productos"""
@@ -1221,6 +1239,21 @@ def reporte_intentos_fallos(df: pd.DataFrame):
     else:
         st.info("No hay órdenes con más de 2 intentos.")
 
+    # Órdenes con 0 intentos
+    st.subheader("⚠️ Órdenes con 0 Intentos y más de 2 días en bodega")
+    #HOLIWIS REGRESAR
+    df_no_intentos_muchos_dias = df[(df['NUM_INTENTOS'] == 0) & (df['EDAD_DIAS'] >= 2) & (df['STATUS'] != "ENTREGADO")& (df['STATUS'] != "ENTREGADO LIQUIDADO")]
+
+    if len(df_no_intentos_muchos_dias) > 0:
+        st.write(f"Total: **{len(df_no_intentos_muchos_dias)}** órdenes")
+        st.dataframe(
+            df_no_intentos_muchos_dias[['ORDEN', 'CLIENTE', 'STATUS', 'SUB STATUS', 'NUM_INTENTOS','EDAD_DIAS', 'DIRECCION']],
+            use_container_width=True,
+            height=300
+        )
+        descargar_csv(df_no_intentos_muchos_dias, "ordenes_0_intentos_+2_dias.csv", key="df_no_intentos_muchos_dias")
+    else:
+        st.info("No hay órdenes con más de 2 intentos.")
 
 def reporte_valor_economico(df: pd.DataFrame):
     """Reporte de valor económico - EXTENDIDO"""
@@ -1245,11 +1278,11 @@ def reporte_valor_economico(df: pd.DataFrame):
         st.metric("🚚 Valor en Ruta", f"Q{kpis['valor_en_ruta']:,.0f}")
     
     with col5:
-        st.metric("⏳ Valor Pendiente", f"Q{kpis['valor_pendiente']:,.0f}")
+        st.metric("⏳ Valor No Entregado/Sin Liquidar", f"Q{kpis['valor_pendiente']:,.0f}")
     
     # Alerta de valor pendiente alto
     if kpis['valor_pendiente'] > 10000:
-        st.warning(f"⚠️ **ALERTA**: Valor pendiente superior a Q10,000 (Q{kpis['valor_pendiente']:,.0f})")
+        st.warning(f"⚠️ **ALERTA**: Valor de 'No Entregados' superior a Q10,000 (Q{kpis['valor_pendiente']:,.0f})")
     
     st.markdown("---")
     
@@ -1275,7 +1308,7 @@ def reporte_valor_economico(df: pd.DataFrame):
             y=['valor_liquidado', 'valor_pendiente'],
             title="Valor por Zona (Top 10)",
             barmode='stack',
-            color_discrete_map={'valor_liquidado': '#28a745', 'valor_pendiente': '#dc3545'}
+            color_discrete_map={'valor_liquidado': '#28a745', 'valor_entregado_sin_liquidar': '#dc3545'}
         )
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True, key="chart_valor_zona")
