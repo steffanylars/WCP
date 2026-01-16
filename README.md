@@ -1,8 +1,8 @@
-# 📦 Sistema de Control Logístico y Reportería
+# Sistema de Control Logístico y Reportería
 
 Aplicación web desarrollada en **Streamlit** para reportería logística y control operativo, basada en archivos CSV.
 
-## 🚀 Características
+## Características
 
 ### Dashboard Principal
 - **KPIs en tiempo real**: Total de órdenes, entregas, efectividad y valor económico
@@ -24,7 +24,7 @@ Aplicación web desarrollada en **Streamlit** para reportería logística y cont
 - Clientes con rechazos recurrentes
 - Órdenes antiguas en estado EN GESTION
 
-## 📋 Requisitos del CSV
+## Requisitos del CSV
 
 El archivo CSV debe contener **exactamente** las siguientes columnas:
 
@@ -138,8 +138,8 @@ Las direcciones se procesan automáticamente para extraer el **geo_key**:
 - Se toma el **3er componente** del split por comas
 - Ejemplo: `Region Metropolitana,Guatemala,Villa Nueva,...` → geo_key = `Villa Nueva`
 - Si hay menos de 3 componentes → geo_key = `DESCONOCIDO`
-
-## 📊 Métricas Clave
+- 
+## Métricas Clave
 
 ### Efectividad
 ```
@@ -155,7 +155,7 @@ Edad (días) = Fecha actual - FECHA de la orden
 - Efectividad < 65% → 🔴 Rojo (requiere atención)
 - Efectividad ≥ 65% → 🟢 Verde (objetivo cumplido)
 
-## 📁 Estructura de archivos
+## Estructura de archivos
 
 ```
 logistics_app/
@@ -164,14 +164,14 @@ logistics_app/
 └── README.md          # Este archivo
 ```
 
-## 🛠️ Tecnologías utilizadas
+## Tecnologías utilizadas
 
 - **Streamlit**: Framework de aplicaciones web
 - **Pandas**: Manipulación de datos
 - **Plotly**: Visualizaciones interactivas
 - **NumPy**: Cálculos numéricos
 
-## 📝 Notas importantes
+## Notas importantes
 
 - Los archivos CSV deben usar codificación UTF-8
 - Los campos vacíos en SUB STATUS son permitidos
