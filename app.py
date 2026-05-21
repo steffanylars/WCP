@@ -1,5 +1,5 @@
 """
-WebCorp Business - Sistema de Control Logistico e Inteligencia Operativa v3.0
+WebCorp Business - Sistema de Control Logistico e Inteligencia Operativa v3.1
 Area de Inteligencia de Negocios
 Desarrollado en Streamlit | Guatemala
 
@@ -17,6 +17,16 @@ FIXES APLICADOS (v3.0):
 - White Spaces (volumen vs efectividad) [MKT #1]
 - Riesgo Competencia desde Sub-Status [MKT #2]
 - Segmentacion por Perfil Logistico de Cliente [MKT #4]
+
+RETRO JEFA (v3.1):
+- Efectividad por cohortes de tiempo: 24h, 48h, 72h, 72h+
+- Desglose de efectividad por canal (CONTROL INTERNO / mensajeria, cargo, forza, MEG)
+- Heatmap canal x cohorte
+- Antiguedad por STATUS con explicacion clara y tabla resumen
+- Geografico ordenado por cantidad de ordenes (impacto), no por efectividad
+- Departamentos con dual-axis: volumen + efectividad
+- Retornos como tasa proporcional (%), no conteo absoluto
+- Texto en retornos muestra retornos/total por producto
 """
 
 import streamlit as st
@@ -439,7 +449,7 @@ def brand_header():
             <p>Area de Inteligencia de Negocios | Control Logistico e Inteligencia Operativa</p>
         </div>
         <div style="text-align:right;">
-            <p style="font-size:0.7rem; opacity:0.7;">v3.0</p>
+            <p style="font-size:0.7rem; opacity:0.7;">v3.1</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -613,6 +623,105 @@ def seccion_dashboard_principal(df):
             "danger"
         )
 
+    # ================================================================
+    # EFECTIVIDAD POR COHORTES DE TIEMPO (retro jefa)
+    # ================================================================
+    section_header("Efectividad por Cohorte de Tiempo")
+    st.caption("Que tan rapido se liquidan las ordenes. Cada cohorte muestra ordenes que YA tienen esa antiguedad minima.")
+
+    # Calcular cohortes
+    df_con_edad = df[df['EDAD_DIAS'].notna()].copy()
+    cohortes = [
+        ('24 hrs', 1, 1),
+        ('48 hrs', 2, 2),
+        ('72 hrs', 3, 3),
+        ('72+ hrs', 4, 9999),
+    ]
+
+    # -- Tabla general de cohortes --
+    cohorte_data = []
+    for label, min_d, max_d in cohortes:
+        mask = (df_con_edad['EDAD_DIAS'] >= min_d) & (df_con_edad['EDAD_DIAS'] <= max_d) if max_d < 9999 else (df_con_edad['EDAD_DIAS'] >= min_d)
+        # Para cohorte "exacta" (ej 24h = ordenes con exactamente 1 dia)
+        # usamos rango para la columna, pero para efectividad acumulada usamos >= min_d
+        df_cohorte_exacta = df_con_edad[(df_con_edad['EDAD_DIAS'] >= min_d) & (df_con_edad['EDAD_DIAS'] <= max_d)] if max_d < 9999 else df_con_edad[df_con_edad['EDAD_DIAS'] >= min_d]
+        df_cohorte_acum = df_con_edad[df_con_edad['EDAD_DIAS'] >= min_d]
+        n_acum = len(df_cohorte_acum)
+        liq_acum = df_cohorte_acum['ES_LIQUIDADO'].sum()
+        efect_acum = (liq_acum / n_acum * 100) if n_acum > 0 else 0
+        cohorte_data.append({
+            'Cohorte': label,
+            'Ordenes (acumulado)': n_acum,
+            'Liquidadas': int(liq_acum),
+            'Efectividad %': round(efect_acum, 1)
+        })
+
+    df_cohortes = pd.DataFrame(cohorte_data)
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        # Tabla de cohortes general
+        st.markdown("**General (todas las ordenes)**")
+        st.dataframe(df_cohortes, use_container_width=True, hide_index=True)
+
+    with c2:
+        # Grafico de barras de efectividad por cohorte
+        fig_coh = go.Figure()
+        colors_coh = [WC['danger'], WC['warning'], WC['accent'], WC['success']]
+        for i, row in df_cohortes.iterrows():
+            fig_coh.add_trace(go.Bar(
+                x=[row['Cohorte']], y=[row['Efectividad %']],
+                marker_color=colors_coh[i] if i < len(colors_coh) else WC['secondary'],
+                text=f"{row['Efectividad %']:.1f}%", textposition='outside',
+                name=row['Cohorte'], showlegend=False
+            ))
+        fig_coh.add_hline(y=65, line_dash="dash", line_color=WC['success'], annotation_text="Meta 65%")
+        fig_coh.update_layout(title="Efectividad Acumulada por Cohorte de Tiempo",
+                              yaxis_title="Efectividad %", yaxis_range=[0, 100], height=350)
+        st.plotly_chart(aplicar_tema(fig_coh), use_container_width=True, key="coh_general")
+
+    # -- Desglose por CANAL (CONTROL INTERNO) --
+    # NOTA: El campo CONTROL INTERNO mapea a los canales operativos.
+    # Si tu data tiene un campo CANAL separado (mensajeria, cargo, forza, MEG),
+    # cambia 'CONTROL INTERNO' por ese campo aqui.
+    section_header("Efectividad por Cohorte y Canal")
+    st.caption("Desglose por canal operativo (campo CONTROL INTERNO). Si los canales son mensajeria/cargo/forza/MEG, mapear en el CSV.")
+
+    canal_col = 'CONTROL INTERNO'
+    if canal_col in df.columns:
+        canales = sorted(df_con_edad[canal_col].dropna().unique().tolist())
+        canal_cohorte_rows = []
+        for canal in canales:
+            df_canal = df_con_edad[df_con_edad[canal_col] == canal]
+            for label, min_d, max_d in cohortes:
+                df_c = df_canal[df_canal['EDAD_DIAS'] >= min_d]
+                n = len(df_c)
+                liq = df_c['ES_LIQUIDADO'].sum()
+                efect = (liq / n * 100) if n > 0 else 0
+                canal_cohorte_rows.append({
+                    'Canal': canal, 'Cohorte': label,
+                    'Ordenes': n, 'Liquidadas': int(liq),
+                    'Efectividad %': round(efect, 1)
+                })
+        df_canal_coh = pd.DataFrame(canal_cohorte_rows)
+
+        # Heatmap-style table
+        pivot = df_canal_coh.pivot_table(index='Canal', columns='Cohorte', values='Efectividad %', aggfunc='first')
+        pivot = pivot.reindex(columns=[c[0] for c in cohortes])
+
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.dataframe(pivot.style.background_gradient(cmap='RdYlGn', vmin=0, vmax=100).format("{:.1f}%"),
+                         use_container_width=True)
+        with c2:
+            fig_hm = px.imshow(pivot, text_auto='.1f', color_continuous_scale='RdYlGn',
+                               range_color=[0, 100], title="Efectividad % por Canal y Cohorte",
+                               labels=dict(x="Cohorte", y="Canal", color="Efectividad %"))
+            fig_hm.update_layout(height=350)
+            st.plotly_chart(aplicar_tema(fig_hm), use_container_width=True, key="coh_canal_hm")
+
+    st.markdown("---")
+
     # Alertas operativas contextuales
     section_header("Alertas Operativas")
     c1, c2, c3 = st.columns(3)
@@ -751,17 +860,18 @@ def reporte_geografico(df):
 
     c1, c2 = st.columns(2)
     with c1:
-        top = ez.sort_values('efectividad', ascending=True).tail(15)
+        # FIX retro jefa: ordenar por cantidad de ordenes (impacto)
+        top = ez.sort_values('total', ascending=True).tail(15)
         colors = [WC['danger'] if e < 65 else WC['success'] for e in top['efectividad']]
         fig = go.Figure(data=[go.Bar(
-            y=top['GEO_KEY'], x=top['efectividad'], orientation='h', marker_color=colors,
-            text=[f"{e:.1f}% (n={int(t)})" for e, t in zip(top['efectividad'], top['total'])],
+            y=top['GEO_KEY'], x=top['total'], orientation='h', marker_color=colors,
+            text=[f"{int(t)} ordenes | {e:.1f}%" for t, e in zip(top['total'], top['efectividad'])],
             textposition='outside')])
-        fig.add_vline(x=65, line_dash="dash", line_color=WC['warning'], annotation_text="Meta 65%")
-        fig.update_layout(title="Efectividad por Zona", xaxis_title="Efectividad (%)", height=500, margin=dict(l=180))
+        fig.update_layout(title="Zonas por Volumen de Ordenes (Top 15, color = efectividad)",
+                          xaxis_title="Cantidad de Ordenes", height=500, margin=dict(l=180))
         st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="geo_zona_bar")
     with c2:
-        # Scatter: volumen vs efectividad (mejor que treemap)
+        # Scatter: volumen vs efectividad
         fig = px.scatter(ez, x='total', y='efectividad', size='valor_total', color='efectividad',
                          color_continuous_scale=[[0, WC['danger']], [0.65, WC['warning']], [1, WC['success']]],
                          range_color=[0,100], hover_name='GEO_KEY',
@@ -769,6 +879,45 @@ def reporte_geografico(df):
                          labels={'total':'Ordenes','efectividad':'Efectividad %'})
         fig.add_hline(y=65, line_dash="dash", line_color=WC['warning'])
         st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="geo_scatter")
+
+    # FIX retro jefa: Departamentos ordenados por volumen
+    section_header("Efectividad por Departamento (ordenado por volumen)")
+    ed = df_f.groupby('DEPARTAMENTO').agg(
+        total=('ORDEN','count'), liquidados=('ES_LIQUIDADO','sum'),
+        valor_total=('VALOR_NUM','sum'),
+        retornos=('STATUS', lambda x: x.isin(['RETORNADO A WEBCORP','RECHAZADO','EN RUTA PARA DEVOLUCION']).sum()),
+    ).reset_index()
+    ed['efectividad'] = (ed['liquidados'] / ed['total'] * 100)
+    # FIX retro jefa: tasa de retorno proporcional, no absoluto
+    ed['tasa_retorno'] = (ed['retornos'] / ed['total'] * 100)
+    ed = ed.sort_values('total', ascending=False)
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=ed.head(15)['DEPARTAMENTO'], y=ed.head(15)['total'],
+            name='Ordenes', marker_color=WC['secondary'], opacity=0.7,
+            text=ed.head(15)['total'], textposition='outside'
+        ))
+        fig.add_trace(go.Scatter(
+            x=ed.head(15)['DEPARTAMENTO'], y=ed.head(15)['efectividad'],
+            name='Efectividad %', mode='lines+markers+text',
+            line=dict(color=WC['success'], width=2),
+            text=[f"{e:.0f}%" for e in ed.head(15)['efectividad']],
+            textposition='top center', yaxis='y2'
+        ))
+        fig.update_layout(
+            title="Departamentos por Volumen + Efectividad",
+            yaxis=dict(title="Ordenes"),
+            yaxis2=dict(title="Efectividad %", overlaying='y', side='right', range=[0, 100]),
+            xaxis_tickangle=-45, height=420,
+            legend=dict(orientation="h", y=1.1)
+        )
+        st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="geo_depto_vol")
+    with c2:
+        st.dataframe(ed[['DEPARTAMENTO','total','efectividad','tasa_retorno']].round(1), use_container_width=True)
+        descargar_csv(ed, "efectividad_departamento.csv", key="dl_geo_depto")
 
     st.dataframe(ez.round(1), use_container_width=True)
     descargar_csv(ez, "efectividad_geografica.csv", key="dl_geo")
@@ -791,7 +940,11 @@ def reporte_productos(df):
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="prod_efect")
     with c2:
-        # Friccion logistica por producto (MKT #7 simplificado)
+        # FIX retro jefa: tasa de retorno PROPORCIONAL (% sobre ordenes de ese producto)
+        # "30% de mil es igual a 30% de 100" - el que mas ordenes tiene no necesariamente
+        # tiene mas retorno proporcionalmente
+        section_header("Tasa de Retorno Proporcional")
+        st.caption("Porcentaje de retorno sobre las ordenes de CADA producto, no conteo absoluto.")
         fr = df.groupby('PRODUCTO').agg(
             total=('ORDEN','count'),
             retornos=('STATUS', lambda x: x.isin(['RETORNADO A WEBCORP','RECHAZADO','EN RUTA PARA DEVOLUCION']).sum()),
@@ -799,9 +952,11 @@ def reporte_productos(df):
         fr['tasa_retorno'] = (fr['retornos'] / fr['total'] * 100)
         fr = fr[fr['retornos'] > 0].sort_values('tasa_retorno', ascending=False).head(10)
         if len(fr) > 0:
-            fig = px.bar(fr, x='PRODUCTO', y='tasa_retorno', title="Tasa de Retorno por Producto",
-                         color='tasa_retorno', color_continuous_scale='Reds', text=[f"{t:.1f}%" for t in fr['tasa_retorno']])
-            fig.update_layout(xaxis_tickangle=-45)
+            fig = px.bar(fr, x='PRODUCTO', y='tasa_retorno',
+                         title="Tasa de Retorno % (proporcional a ordenes del producto)",
+                         color='tasa_retorno', color_continuous_scale='Reds',
+                         text=[f"{t:.1f}% ({int(r)}/{int(tot)})" for t, r, tot in zip(fr['tasa_retorno'], fr['retornos'], fr['total'])])
+            fig.update_layout(xaxis_tickangle=-45, yaxis_title="Tasa de Retorno %")
             st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="prod_retorno")
 
     st.dataframe(ps.round(1), use_container_width=True)
@@ -849,6 +1004,57 @@ def reporte_intentos(df):
         alert_box(f"{len(df_fantasma)} ordenes con 0 intentos y 2+ dias en bodega. Estas ordenes no se estan trabajando.", "danger")
         st.dataframe(df_fantasma[['ORDEN','CLIENTE','STATUS','SUB STATUS','EDAD_DIAS','DIRECCION']].head(50), height=250)
         descargar_csv(df_fantasma, "ordenes_0_intentos_2dias.csv", key="dl_fantasma")
+
+    # ================================================================
+    # ANTIGUEDAD POR STATUS (retro jefa: "que se entienda")
+    # ================================================================
+    section_header("Antiguedad de Ordenes por STATUS")
+    st.caption(
+        "Cada barra/caja muestra cuantos DIAS llevan las ordenes que estan en ese estado. "
+        "Si una orden esta en 'EN GESTION' y la caja marca 5-10 dias, significa que esas ordenes "
+        "llevan entre 5 y 10 dias sin resolverse. A mayor antiguedad, mayor urgencia."
+    )
+
+    df_no_liq = df[~df['ES_LIQUIDADO'] & df['EDAD_DIAS'].notna()].copy()
+    if len(df_no_liq) > 0:
+        # Tabla resumen clara
+        antig = df_no_liq.groupby('STATUS').agg(
+            ordenes=('ORDEN','count'),
+            dias_promedio=('EDAD_DIAS','mean'),
+            dias_minimo=('EDAD_DIAS','min'),
+            dias_maximo=('EDAD_DIAS','max'),
+            dias_mediana=('EDAD_DIAS','median'),
+        ).reset_index().sort_values('dias_promedio', ascending=False)
+        antig = antig.round(1)
+
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.markdown("**Resumen: dias que llevan las ordenes en cada estado**")
+            st.dataframe(antig, use_container_width=True, hide_index=True)
+            prom_general = df_no_liq['EDAD_DIAS'].mean()
+            st.metric("Antiguedad Promedio General (no liquidadas)", f"{prom_general:.1f} dias")
+
+        with c2:
+            # Bar chart horizontal: promedio de dias por status (mas claro que boxplot)
+            antig_sorted = antig.sort_values('dias_promedio', ascending=True)
+            colors = [WC['danger'] if d > 7 else WC['warning'] if d > 3 else WC['success']
+                      for d in antig_sorted['dias_promedio']]
+            fig = go.Figure(data=[go.Bar(
+                y=antig_sorted['STATUS'],
+                x=antig_sorted['dias_promedio'],
+                orientation='h',
+                marker_color=colors,
+                text=[f"{d:.1f} dias ({int(n)} ordenes)" for d, n in zip(antig_sorted['dias_promedio'], antig_sorted['ordenes'])],
+                textposition='outside'
+            )])
+            fig.update_layout(
+                title="Dias promedio que llevan las ordenes en cada estado (no liquidadas)",
+                xaxis_title="Dias promedio en el estado",
+                height=400, margin=dict(l=200)
+            )
+            st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="antig_status_bar")
+    else:
+        st.success("Todas las ordenes estan liquidadas.")
 
 
 def reporte_valor(df):
