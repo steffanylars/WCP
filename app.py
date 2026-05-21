@@ -711,8 +711,7 @@ def seccion_dashboard_principal(df):
 
         c1, c2 = st.columns([1, 2])
         with c1:
-            st.dataframe(pivot.style.background_gradient(cmap='RdYlGn', vmin=0, vmax=100).format("{:.1f}%"),
-                         use_container_width=True)
+            st.dataframe(pivot.round(1), use_container_width=True)
         with c2:
             fig_hm = px.imshow(pivot, text_auto='.1f', color_continuous_scale='RdYlGn',
                                range_color=[0, 100], title="Efectividad % por Canal y Cohorte",
