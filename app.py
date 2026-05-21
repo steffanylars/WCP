@@ -1,7 +1,22 @@
 """
-Aplicación de Reportería Logística y Control Operativo v2.0
-Desarrollada en Streamlit para análisis de datos de seguimiento de entregas
-CORREGIDO: Duplicate element IDs, cálculos de efectividad, filtros múltiples
+WebCorp Business - Sistema de Control Logistico e Inteligencia Operativa v3.0
+Area de Inteligencia de Negocios
+Desarrollado en Streamlit | Guatemala
+
+FIXES APLICADOS (v3.0):
+- Efectividad por cohorte de antiguedad (no sobre ordenes de hoy)
+- "Entregado sin Liquidar" como ALERTA ROJA de cartera vencida
+- datetime truncado a medianoche para EDAD_DIAS
+- Parser de fechas robusto con reporte de calidad de datos
+- Modo permisivo: carga todo, analiza lo limpio, reporta lo sucio
+- Deduplicacion automatica por ORDEN
+- VALOR_NUM limpia formatos Q, $, comas antes de convertir
+- Ranking de asesores con filtro minimo de volumen
+- Lead Time Deposito -> Liquidacion
+- Alertas basadas en % del volumen, no montos fijos
+- White Spaces (volumen vs efectividad) [MKT #1]
+- Riesgo Competencia desde Sub-Status [MKT #2]
+- Segmentacion por Perfil Logistico de Cliente [MKT #4]
 """
 
 import streamlit as st
@@ -14,79 +29,169 @@ from plotly.subplots import make_subplots
 import io
 from typing import Tuple, List, Dict, Optional
 import uuid
+import re
 
 # ============================================================================
-# CONFIGURACIÓN INICIAL
+# CONFIGURACION Y BRANDING WEBCORP
 # ============================================================================
+
+# Paleta WebCorp Business - Inteligencia de Negocios
+WC = {
+    'primary':     '#1B4F8A',   # Azul oscuro corporativo
+    'secondary':   '#2E86DE',   # Azul WebCorp (del logo)
+    'accent':      '#0ABDE3',   # Cian claro
+    'success':     '#10AC84',   # Verde exito
+    'warning':     '#F39C12',   # Ambar alerta
+    'danger':      '#EE5A24',   # Rojo peligro
+    'critical':    '#B71540',   # Rojo critico
+    'bg':          '#FFFFFF',   # Fondo blanco
+    'bg_light':    '#F8F9FA',   # Gris muy claro
+    'bg_card':     '#F1F2F6',   # Gris tarjeta
+    'text':        '#2D3436',   # Texto principal
+    'text_muted':  '#636E72',   # Texto secundario
+    'border':      '#DFE6E9',   # Bordes
+}
 
 st.set_page_config(
-    page_title="📦 Control Logístico",
-    page_icon="📦",
+    page_title="WebCorp BI | Control Logistico",
+    page_icon="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>W</text></svg>",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS personalizados
-st.markdown("""
+st.markdown(f"""
 <style>
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    html, body, [class*="css"] {{
+        font-family: 'Inter', sans-serif;
+    }}
+
+    .stApp {{
+        background-color: {WC['bg']};
+    }}
+
+    /* Header brand bar */
+    .brand-bar {{
+        background: linear-gradient(135deg, {WC['primary']} 0%, {WC['secondary']} 100%);
+        padding: 16px 24px;
+        border-radius: 12px;
         color: white;
-        text-align: center;
-    }
-    .metric-card-red {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        padding: 20px;
+        margin-bottom: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }}
+    .brand-bar h1 {{
+        margin: 0; font-size: 1.5rem; font-weight: 700; color: white;
+    }}
+    .brand-bar p {{
+        margin: 0; font-size: 0.8rem; opacity: 0.85; color: white;
+    }}
+
+    /* KPI Cards */
+    .kpi-card {{
+        background: {WC['bg']};
+        border: 1px solid {WC['border']};
         border-radius: 10px;
-        color: white;
+        padding: 16px;
         text-align: center;
-    }
-    .metric-card-green {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-    }
-    .metric-card-orange {
-        background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-    }
-    .alert-box {
-        padding: 15px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }}
+    .kpi-card h4 {{
+        margin: 0; font-size: 0.75rem; font-weight: 500;
+        color: {WC['text_muted']}; text-transform: uppercase; letter-spacing: 0.5px;
+    }}
+    .kpi-card .kpi-value {{
+        font-size: 1.8rem; font-weight: 700; margin: 6px 0 2px 0;
+    }}
+    .kpi-card .kpi-sub {{
+        font-size: 0.72rem; color: {WC['text_muted']}; margin: 0;
+    }}
+    .kpi-blue .kpi-value {{ color: {WC['secondary']}; }}
+    .kpi-green .kpi-value {{ color: {WC['success']}; }}
+    .kpi-orange .kpi-value {{ color: {WC['warning']}; }}
+    .kpi-red .kpi-value {{ color: {WC['danger']}; }}
+    .kpi-critical .kpi-value {{ color: {WC['critical']}; }}
+
+    /* Alert boxes */
+    .alert-wc {{
+        padding: 14px 18px;
         border-radius: 8px;
-        margin: 10px 0;
-    }
-    .alert-warning {
-        background-color: #fff3cd;
-        border-left: 4px solid #ffc107;
-    }
-    .alert-danger {
-        background-color: #f8d7da;
-        border-left: 4px solid #dc3545;
-    }
-    .alert-success {
-        background-color: #d4edda;
-        border-left: 4px solid #28a745;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        padding-left: 20px;
-        padding-right: 20px;
-    }
+        margin: 8px 0;
+        font-size: 0.85rem;
+        border-left: 4px solid;
+    }}
+    .alert-danger {{
+        background-color: #FFF5F5; border-color: {WC['danger']};
+        color: {WC['danger']};
+    }}
+    .alert-warning {{
+        background-color: #FFFBF0; border-color: {WC['warning']};
+        color: #946200;
+    }}
+    .alert-success {{
+        background-color: #F0FFF4; border-color: {WC['success']};
+        color: #0B6E4F;
+    }}
+    .alert-info {{
+        background-color: #EBF5FF; border-color: {WC['secondary']};
+        color: {WC['primary']};
+    }}
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 4px;
+        background-color: {WC['bg_light']};
+        border-radius: 8px;
+        padding: 4px;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        height: 40px;
+        border-radius: 6px;
+        font-weight: 500;
+        font-size: 0.85rem;
+    }}
+
+    /* Section dividers */
+    .section-header {{
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: {WC['primary']};
+        border-bottom: 2px solid {WC['secondary']};
+        padding-bottom: 8px;
+        margin: 20px 0 12px 0;
+    }}
+
+    /* Data quality badge */
+    .dq-badge {{
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 0.72rem;
+        font-weight: 600;
+    }}
+    .dq-good {{ background: #D4EDDA; color: #155724; }}
+    .dq-warn {{ background: #FFF3CD; color: #856404; }}
+    .dq-bad {{ background: #F8D7DA; color: #721C24; }}
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {{
+        background-color: {WC['bg_light']};
+    }}
+    section[data-testid="stSidebar"] .stButton > button {{
+        width: 100%;
+        background: linear-gradient(135deg, {WC['primary']}, {WC['secondary']});
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# CATÁLOGOS OFICIALES
+# CATALOGOS
 # ============================================================================
 
 COLUMNAS_OBLIGATORIAS = [
@@ -97,56 +202,23 @@ COLUMNAS_OBLIGATORIAS = [
 ]
 
 STATUS_VALIDOS = [
-    'ENTREGADO LIQUIDADO',
-    'ENTREGADO',  # AGREGADO: Status de entregado pero sin liquidar
-    'EN RUTA',
-    'EN GESTION',
-    'REPROGRAMADO',
-    'ILOCALIZABLE',
-    'RECHAZADO',
-    'RECLAMO',
-    'FUERA DE COBERTURA',
-    'EN RUTA PARA DEVOLUCION',
-    'RETORNADO A WEBCORP'
+    'ENTREGADO LIQUIDADO', 'ENTREGADO', 'EN RUTA', 'EN GESTION',
+    'REPROGRAMADO', 'ILOCALIZABLE', 'RECHAZADO', 'RECLAMO',
+    'FUERA DE COBERTURA', 'EN RUTA PARA DEVOLUCION', 'RETORNADO A WEBCORP'
 ]
 
-SUB_STATUS_VALIDOS = [
-    'PUNTO DE ENCUENTRO',
-    'ENTREGADO',
-    'CONFIRMADO POR CLIENTE',
-    'EN GESTION',
-    'CONFIRMADO NUEVA FECHA',
-    'ALMACENADO',
-    'REPROGRAMADO CC',
-    'DIRECCIÓN Y TELEFONO ERRONEO',
-    'FUERA DE COBERTURA',
-    'NO TIENE DINERO',
-    'DUPLICADO',
-    'NO HIZO PEDIDO',
-    'PRECIO INCORRECTO',
-    'CAMBIO DE DIRECCIÓN',
-    'FUERA DE TIEMPO',
-    'NUMERO INCORRECTO',
-    'ERROR EN PRODUCTO',
-    'RECHAZADO CC',
-    'TIEMPO DE ESPERA',
-    'COMPRA OTRO PRODUCTO',
-    'NADIE EN CASA',
-    'ESPERA DE PAGO CARGO',
-    'AGENCIA FUERA DE COBERTURA',
-    'AGENCIA A PETICION DEL CLIENTE',
-    'DIRECTO A AGENCIA',
-    'CUMPLIO INTENTOS DE ENTREGA',
-    'RETORNO A SOLICITUD DE CC',
-    'RETORNADO A WEBCORP'
+# Sub-status que indican riesgo competitivo (MKT #2)
+RIESGO_COMPETENCIA = [
+    'NO HIZO PEDIDO', 'PRECIO INCORRECTO',
+    'COMPRA OTRO PRODUCTO', 'ERROR EN PRODUCTO'
 ]
 
 # ============================================================================
-# FUNCIONES DE VALIDACIÓN
+# FUNCIONES DE VALIDACION (MODO PERMISIVO)
 # ============================================================================
 
-def validar_estructura_csv(df: pd.DataFrame, nombre_archivo: str) -> Tuple[bool, str]:
-    """Valida que el DataFrame tenga todas las columnas obligatorias."""
+def validar_estructura_csv(df: pd.DataFrame, nombre_archivo: str) -> Tuple[bool, str, List[str]]:
+    """Valida columnas. Retorna (ok, mensaje, columnas_faltantes)."""
     columnas_base = []
     for col in df.columns:
         col_limpio = col.strip()
@@ -155,1903 +227,1036 @@ def validar_estructura_csv(df: pd.DataFrame, nombre_archivo: str) -> Tuple[bool,
             if partes[1].isdigit():
                 col_limpio = partes[0]
         columnas_base.append(col_limpio.upper())
-    
+
     columnas_unicas = set(columnas_base)
-    columnas_faltantes = []
-    
-    for col in COLUMNAS_OBLIGATORIAS:
-        if col.upper() not in columnas_unicas:
-            columnas_faltantes.append(col)
-    
-    if columnas_faltantes:
-        return False, f"❌ **{nombre_archivo}**: Columnas faltantes: {', '.join(columnas_faltantes)}"
-    
-    return True, ""
+    faltantes = [c for c in COLUMNAS_OBLIGATORIAS if c.upper() not in columnas_unicas]
+
+    if faltantes:
+        return False, f"{nombre_archivo}: Columnas faltantes: {', '.join(faltantes)}", faltantes
+    return True, "", []
 
 
 def normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
-    """Normaliza los nombres de las columnas."""
+    """Normaliza nombres de columnas, elimina duplicadas y Unnamed."""
     df = df.copy()
-    
-    nuevos_nombres = []
+    nuevos = []
     for col in df.columns:
         nombre = str(col).strip() if col is not None else ''
         nombre = nombre.replace('\xa0', ' ')
         nombre = ' '.join(nombre.split())
-        nuevos_nombres.append(nombre)
-    
-    df.columns = nuevos_nombres
-    
-    columnas_a_mantener = []
-    nombres_vistos = set()
-    
+        nuevos.append(nombre)
+    df.columns = nuevos
+
+    columnas_ok = []
+    vistos = set()
     for col in df.columns:
-        nombre_base = col
+        base = col
         if '.' in col:
             partes = col.rsplit('.', 1)
             if partes[1].isdigit():
-                nombre_base = partes[0]
-        
-        if nombre_base not in nombres_vistos and nombre_base != '':
-            columnas_a_mantener.append(col)
-            nombres_vistos.add(nombre_base)
-    
-    df = df[columnas_a_mantener]
-    
-    nuevos_nombres = {}
+                base = partes[0]
+        if base not in vistos and base != '':
+            columnas_ok.append(col)
+            vistos.add(base)
+    df = df[columnas_ok]
+
+    renames = {}
     for col in df.columns:
         if '.' in col:
             partes = col.rsplit('.', 1)
             if partes[1].isdigit():
-                nuevos_nombres[col] = partes[0]
-    
-    if nuevos_nombres:
-        df = df.rename(columns=nuevos_nombres)
-    
+                renames[col] = partes[0]
+    if renames:
+        df = df.rename(columns=renames)
+
     df = df.loc[:, ~df.columns.str.startswith('Unnamed')]
     df = df.loc[:, df.columns != '']
-    
     return df
 
 
-def parsear_fecha(valor) -> Optional[datetime]:
-    """Intenta parsear una fecha en varios formatos comunes"""
-    if pd.isna(valor) or str(valor).strip() in ['', '#N/A', 'N/A', 'nan', 'None']:
-        return None
-    
-    valor_str = str(valor).strip()
-    formatos = ['%d/%m/%y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%d-%m-%y']
-    
-    for fmt in formatos:
-        try:
-            return datetime.strptime(valor_str, fmt)
-        except ValueError:
-            continue
-    
-    return None
+def parsear_fecha_robusto(serie: pd.Series) -> Tuple[pd.Series, float]:
+    """Parsea fechas con pd.to_datetime, retorna (serie_dt, pct_fallos)."""
+    resultado = pd.to_datetime(serie, format='%d/%m/%y', errors='coerce')
+    mask_na = resultado.isna() & serie.notna() & (serie.astype(str).str.strip() != '') & (~serie.astype(str).str.strip().isin(['#N/A', 'N/A', 'nan', 'None', '']))
+    if mask_na.any():
+        for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+            pendientes = mask_na & resultado.isna()
+            if not pendientes.any():
+                break
+            resultado[pendientes] = pd.to_datetime(serie[pendientes], format=fmt, errors='coerce')
+
+    total_no_vacio = serie.notna() & (serie.astype(str).str.strip() != '') & (~serie.astype(str).str.strip().isin(['#N/A', 'N/A', 'nan', 'None']))
+    n_total = total_no_vacio.sum()
+    n_fallos = (resultado.isna() & total_no_vacio).sum()
+    pct_fallos = (n_fallos / n_total * 100) if n_total > 0 else 0.0
+    return resultado, pct_fallos
+
+
+def limpiar_valor(serie: pd.Series) -> Tuple[pd.Series, float]:
+    """Limpia Q, $, comas, espacios antes de convertir a numerico."""
+    limpio = serie.astype(str).str.replace(r'[Q$\s,]', '', regex=True)
+    resultado = pd.to_numeric(limpio, errors='coerce')
+    total_no_vacio = serie.notna() & (serie.astype(str).str.strip() != '')
+    n_total = total_no_vacio.sum()
+    n_nulos = (resultado.isna() & total_no_vacio).sum()
+    pct_fallos = (n_nulos / n_total * 100) if n_total > 0 else 0.0
+    resultado = resultado.fillna(0)
+    return resultado, pct_fallos
 
 
 def extraer_intentos(valor) -> int:
-    """Extrae el número de intentos de entrega del texto"""
     if pd.isna(valor) or str(valor).strip() == '':
         return 0
-    
-    valor_str = str(valor).upper().strip()
-    
-    import re
-    match = re.search(r'(\d+)\s*INTENTO', valor_str)
-    if match:
-        return int(match.group(1))
-    
-    return 0
+    match = re.search(r'(\d+)\s*INTENTO', str(valor).upper().strip())
+    return int(match.group(1)) if match else 0
 
 
-def extraer_geo_key(direccion: str) -> str:
-    """Extrae el tercer componente de la dirección (municipio/zona)"""
+def extraer_componente_direccion(direccion, idx: int) -> str:
+    """Extrae componente por indice del formato Region,Depto,Zona,..."""
     if pd.isna(direccion) or str(direccion).strip() == '':
-        return 'DESCONOCIDO'
-    
+        return 'SIN DATO'
     partes = str(direccion).split(',')
-    if len(partes) >= 3:
-        return partes[2].strip()
-    return 'DESCONOCIDO'
+    if len(partes) > idx:
+        val = partes[idx].strip()
+        return val if val else 'SIN DATO'
+    return 'SIN DATO'
 
 
-def extraer_departamento(direccion: str) -> str:
-    """Extrae el segundo componente de la dirección (departamento)"""
-    if pd.isna(direccion) or str(direccion).strip() == '':
-        return 'DESCONOCIDO'
-    
-    partes = str(direccion).split(',')
-    if len(partes) >= 2:
-        return partes[1].strip()
-    return 'DESCONOCIDO'
-
-
-def extraer_region(direccion: str) -> str:
-    """Extrae el primer componente de la dirección (región)"""
-    if pd.isna(direccion) or str(direccion).strip() == '':
-        return 'DESCONOCIDO'
-    
-    partes = str(direccion).split(',')
-    if len(partes) >= 1:
-        return partes[0].strip()
-    return 'DESCONOCIDO'
-
-
-def validar_contenido_fila(row: pd.Series, idx: int) -> List[Dict]:
-    """Valida el contenido de una fila y retorna lista de errores encontrados."""
-    errores = []
-    orden = row.get('ORDEN', '')
-    
-    if pd.isna(row.get('ORDEN')) or str(row.get('ORDEN', '')).strip() == '':
-        errores.append({
-            'fila': idx + 2,
-            'orden': str(orden),
-            'campo': 'ORDEN',
-            'razon': 'El campo ORDEN está vacío'
-        })
-    
-    if pd.isna(row.get('DIRECCION')) or str(row.get('DIRECCION', '')).strip() == '':
-        errores.append({
-            'fila': idx + 2,
-            'orden': str(orden),
-            'campo': 'DIRECCION',
-            'razon': 'El campo DIRECCION está vacío'
-        })
-    
-    status = row.get('STATUS', '')
-    if pd.isna(status) or str(status).strip() == '':
-        errores.append({
-            'fila': idx + 2,
-            'orden': str(orden),
-            'campo': 'STATUS',
-            'razon': 'El campo STATUS está vacío'
-        })
-    elif str(status).strip().upper() not in [s.upper() for s in STATUS_VALIDOS]:
-        errores.append({
-            'fila': idx + 2,
-            'orden': str(orden),
-            'campo': 'STATUS',
-            'razon': f'STATUS "{status}" no está en el catálogo válido'
-        })
-    
-    sub_status = row.get('SUB STATUS', '')
-    if not pd.isna(sub_status) and str(sub_status).strip() != '':
-        if str(sub_status).strip().upper() not in [s.upper() for s in SUB_STATUS_VALIDOS]:
-            errores.append({
-                'fila': idx + 2,
-                'orden': str(orden),
-                'campo': 'SUB STATUS',
-                'razon': f'SUB STATUS "{sub_status}" no está en el catálogo válido'
-            })
-    
-    fecha = row.get('FECHA', '')
-    if pd.isna(fecha) or str(fecha).strip() == '':
-        errores.append({
-            'fila': idx + 2,
-            'orden': str(orden),
-            'campo': 'FECHA',
-            'razon': 'El campo FECHA está vacío'
-        })
-    elif parsear_fecha(fecha) is None:
-        errores.append({
-            'fila': idx + 2,
-            'orden': str(orden),
-            'campo': 'FECHA',
-            'razon': f'FECHA "{fecha}" no es una fecha válida'
-        })
-    
-    fecha_deposito = row.get('FECHA DEPOSITO', '')
-    if not pd.isna(fecha_deposito) and str(fecha_deposito).strip() not in ['', '#N/A', 'N/A']:
-        if parsear_fecha(fecha_deposito) is None:
-            errores.append({
-                'fila': idx + 2,
-                'orden': str(orden),
-                'campo': 'FECHA DEPOSITO',
-                'razon': f'FECHA DEPOSITO "{fecha_deposito}" no es una fecha válida'
-            })
-    
-    return errores
-
-
-def procesar_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Procesa el DataFrame añadiendo campos calculados"""
+def procesar_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
+    """Procesa el DataFrame. Retorna (df_procesado, reporte_calidad)."""
     df = df.copy()
-    
-    df['FECHA_DT'] = df['FECHA'].apply(parsear_fecha)
-    
-    hoy = datetime.now()
-    df['EDAD_DIAS'] = df['FECHA_DT'].apply(
-        lambda x: (hoy - x).days if x is not None else None
-    )
-    
-    # Campos geográficos
-    df['GEO_KEY'] = df['DIRECCION'].apply(extraer_geo_key)
-    df['DEPARTAMENTO'] = df['DIRECCION'].apply(extraer_departamento)
-    df['REGION'] = df['DIRECCION'].apply(extraer_region)
-    
+    calidad = {}
+
+    # Normalizar STATUS
+    if 'STATUS' in df.columns:
+        df['STATUS'] = df['STATUS'].astype(str).str.strip().str.upper()
+        df.loc[df['STATUS'].isin(['NAN', '', 'NONE']), 'STATUS'] = 'SIN STATUS'
+
+    if 'SUB STATUS' in df.columns:
+        df['SUB STATUS'] = df['SUB STATUS'].astype(str).str.strip().str.upper()
+        df.loc[df['SUB STATUS'].isin(['NAN', '', 'NONE']), 'SUB STATUS'] = ''
+
+    # Fechas
+    df['FECHA_DT'], pct_fecha = parsear_fecha_robusto(df['FECHA'])
+    calidad['pct_fecha_invalida'] = pct_fecha
+
+    df['FECHA_DEPOSITO_DT'] = pd.NaT
+    if 'FECHA DEPOSITO' in df.columns:
+        df['FECHA_DEPOSITO_DT'], pct_dep = parsear_fecha_robusto(df['FECHA DEPOSITO'])
+        calidad['pct_fecha_deposito_invalida'] = pct_dep
+
+    # FIX: EDAD_DIAS con medianoche, no datetime.now()
+    hoy = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    df['EDAD_DIAS'] = df['FECHA_DT'].apply(lambda x: (hoy - x).days if pd.notna(x) else None)
+
+    # Lead Time: Deposito -> hoy (o liquidacion)
+    df['LEAD_TIME'] = None
+    mask_dep = df['FECHA_DEPOSITO_DT'].notna() & df['FECHA_DT'].notna()
+    df.loc[mask_dep, 'LEAD_TIME'] = (df.loc[mask_dep, 'FECHA_DEPOSITO_DT'] - df.loc[mask_dep, 'FECHA_DT']).dt.days
+
+    # Geograficos
+    df['REGION'] = df['DIRECCION'].apply(lambda x: extraer_componente_direccion(x, 0))
+    df['DEPARTAMENTO'] = df['DIRECCION'].apply(lambda x: extraer_componente_direccion(x, 1))
+    df['GEO_KEY'] = df['DIRECCION'].apply(lambda x: extraer_componente_direccion(x, 2))
+
+    calidad['pct_geo_sin_dato'] = (df['GEO_KEY'] == 'SIN DATO').mean() * 100
+
+    # Intentos
     df['NUM_INTENTOS'] = df['INTENTOS DE ENTREGA'].apply(extraer_intentos)
-    
+
     # Flags de estado
-    df['ES_LIQUIDADO'] = df['STATUS'].str.upper().str.strip() == 'ENTREGADO LIQUIDADO'
-    df['ES_ENTREGADO'] = df['STATUS'].str.upper().str.strip() == 'ENTREGADO'
+    df['ES_LIQUIDADO'] = df['STATUS'] == 'ENTREGADO LIQUIDADO'
+    df['ES_ENTREGADO'] = df['STATUS'] == 'ENTREGADO'
     df['ES_ENTREGADO_O_LIQUIDADO'] = df['ES_LIQUIDADO'] | df['ES_ENTREGADO']
-    
-    df['ES_METRO_GUATEMALA'] = df['DIRECCION'].str.startswith('Region Metropolitana,Guatemala,', na=False)
-    
-    df['VALOR_NUM'] = pd.to_numeric(df['VALOR'], errors='coerce').fillna(0)
-    
-    return df
+    df['ES_METRO_GUATEMALA'] = df['DIRECCION'].astype(str).str.upper().str.startswith('REGION METROPOLITANA,GUATEMALA,')
+
+    # FIX: VALOR_NUM con limpieza de formato
+    df['VALOR_NUM'], pct_valor = limpiar_valor(df['VALOR'])
+    calidad['pct_valor_invalido'] = pct_valor
+
+    # Producto (primer componente de REFERENCIA)
+    df['PRODUCTO'] = df['REFERENCIA'].apply(
+        lambda x: str(x).split(',')[0].strip() if pd.notna(x) else 'SIN REFERENCIA'
+    )
+
+    # Riesgo competencia (MKT #2)
+    df['ES_RIESGO_COMPETENCIA'] = df['SUB STATUS'].isin(RIESGO_COMPETENCIA)
+
+    return df, calidad
 
 
 # ============================================================================
-# FUNCIONES DE MÉTRICAS
+# METRICAS (CORREGIDAS)
 # ============================================================================
 
-def calcular_efectividad(df: pd.DataFrame) -> float:
-    """Calcula el porcentaje de efectividad (solo ENTREGADO LIQUIDADO)"""
+def calcular_efectividad_cohorte(df: pd.DataFrame, dias_minimo: int = 3) -> float:
+    """FIX: Efectividad = Liquidadas / Ordenes con >= N dias de antiguedad.
+    Excluye ordenes jovenes del denominador."""
+    df_cohorte = df[df['EDAD_DIAS'].notna() & (df['EDAD_DIAS'] >= dias_minimo)]
+    if len(df_cohorte) == 0:
+        return 0.0
+    return (df_cohorte['ES_LIQUIDADO'].sum() / len(df_cohorte)) * 100
+
+
+def calcular_efectividad_simple(df: pd.DataFrame) -> float:
+    """Efectividad bruta (para compatibilidad)."""
     if len(df) == 0:
         return 0.0
-    liquidados = df['ES_LIQUIDADO'].sum()
-    return (liquidados / len(df)) * 100
+    return (df['ES_LIQUIDADO'].sum() / len(df)) * 100
 
 
 def obtener_kpis_generales(df: pd.DataFrame) -> Dict:
-    """Calcula los KPIs generales del dashboard"""
     total = len(df)
     liquidados = int(df['ES_LIQUIDADO'].sum())
-    entregados_sin_liquidar = int(df['ES_ENTREGADO'].sum())
-    efectividad = calcular_efectividad(df)
-    
-    valor_liquidado = df[df['ES_LIQUIDADO']]['VALOR_NUM'].sum()
-    valor_entregado_sin_liquidar = df[df['ES_ENTREGADO']]['VALOR_NUM'].sum()
-    valor_en_ruta = df[df['STATUS'].str.upper() == 'EN RUTA']['VALOR_NUM'].sum()
-    valor_pendiente = df[~df['ES_LIQUIDADO']]['VALOR_NUM'].sum()
-    
+    entregados_sin_liq = int(df['ES_ENTREGADO'].sum())
+    efectividad_cohorte = calcular_efectividad_cohorte(df, dias_minimo=3)
+    efectividad_bruta = calcular_efectividad_simple(df)
+
     return {
         'total_ordenes': total,
         'total_liquidadas': liquidados,
-        'total_entregadas_sin_liquidar': entregados_sin_liquidar,
+        'total_entregadas_sin_liquidar': entregados_sin_liq,
         'total_pendientes': total - liquidados,
-        'efectividad': efectividad,
+        'efectividad_cohorte': efectividad_cohorte,
+        'efectividad_bruta': efectividad_bruta,
         'valor_total': df['VALOR_NUM'].sum(),
-        'valor_liquidado': valor_liquidado,
-        'valor_entregado_sin_liquidar': valor_entregado_sin_liquidar,
-        'valor_en_ruta': valor_en_ruta,
-        'valor_pendiente': valor_pendiente
+        'valor_liquidado': df.loc[df['ES_LIQUIDADO'], 'VALOR_NUM'].sum(),
+        'valor_entregado_sin_liquidar': df.loc[df['ES_ENTREGADO'], 'VALOR_NUM'].sum(),
+        'valor_en_ruta': df.loc[df['STATUS'] == 'EN RUTA', 'VALOR_NUM'].sum(),
+        'valor_pendiente': df.loc[~df['ES_LIQUIDADO'], 'VALOR_NUM'].sum(),
     }
 
 
 # ============================================================================
-# FUNCIONES DE VISUALIZACIÓN
+# COMPONENTES UI
 # ============================================================================
 
-def crear_grafico_status(df: pd.DataFrame, key_suffix: str = "") -> go.Figure:
-    """Crea gráfico de donut para distribución de STATUS"""
-    status_counts = df['STATUS'].value_counts()
-    
-    colors = px.colors.qualitative.Set3
-    
-    fig = go.Figure(data=[go.Pie(
-        labels=status_counts.index,
-        values=status_counts.values,
-        hole=0.5,
-        marker_colors=colors[:len(status_counts)],
-        textinfo='percent+label',
-        textposition='outside'
-    )])
-    
-    fig.update_layout(
-        title="Distribución por STATUS",
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.3),
-        height=450
-    )
-    
-    return fig
+def brand_header():
+    st.markdown(f"""
+    <div class="brand-bar">
+        <div>
+            <h1>WEBCORP Business</h1>
+            <p>Area de Inteligencia de Negocios | Control Logistico e Inteligencia Operativa</p>
+        </div>
+        <div style="text-align:right;">
+            <p style="font-size:0.7rem; opacity:0.7;">v3.0</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-def crear_grafico_efectividad_zona(df: pd.DataFrame, key_suffix: str = "") -> go.Figure:
-    """Crea gráfico de barras de efectividad por zona con barra deslizante"""
-
-    efectividad_zona = df.groupby('GEO_KEY').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum')
-    ).reset_index()
-
-    efectividad_zona['efectividad'] = (
-        efectividad_zona['liquidados'] / efectividad_zona['total']
-    ) * 100
-
-    efectividad_zona = efectividad_zona.sort_values(
-        'efectividad', ascending=True
-    ).reset_index(drop=True)
-
-    n_zonas = len(efectividad_zona)
-    window_size = 15  # cuántas barras se muestran a la vez
-
-    start_idx = st.slider(
-        "Desliza para ver más zonas",
-        min_value=0,
-        max_value=max(0, n_zonas - window_size),
-        value=0,
-        step=1,
-        key=f"slider_zona_{key_suffix}"
-    )
-
-    zona_view = efectividad_zona.iloc[start_idx:start_idx + window_size]
-
-    colors = [
-        '#dc3545' if e < 65 else '#28a745'
-        for e in zona_view['efectividad']
-    ]
-
-    fig = go.Figure(data=[go.Bar(
-        y=zona_view['GEO_KEY'],
-        x=zona_view['efectividad'],
-        orientation='h',
-        marker_color=colors,
-        text=[
-            f"{e:.1f}% ({int(t)})"
-            for e, t in zip(zona_view['efectividad'], zona_view['total'])
-        ],
-        textposition='outside'
-    )])
-
-    fig.add_vline(
-        x=65,
-        line_dash="dash",
-        line_color="orange",
-        annotation_text="Meta 65%",
-        annotation_position="top"
-    )
-
-    fig.update_layout(
-        title=f"Efectividad por Zona (mostrando {start_idx + 1}–{min(start_idx + window_size, n_zonas)} de {n_zonas})",
-        xaxis_title="Efectividad (%)",
-        yaxis_title="Zona",
-        height=500,
-        margin=dict(l=200)
-    )
-
-    return fig
+def kpi_card(titulo, valor, subtitulo="", tipo="blue"):
+    st.markdown(f"""
+    <div class="kpi-card kpi-{tipo}">
+        <h4>{titulo}</h4>
+        <p class="kpi-value">{valor}</p>
+        <p class="kpi-sub">{subtitulo}</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-def crear_grafico_tendencia(df: pd.DataFrame, key_suffix: str = "") -> go.Figure:
-    """Crea gráfico de tendencia temporal - CORREGIDO para mostrar todos los días"""
-    df_fechas = df[df['FECHA_DT'].notna()].copy()
-    
-    if len(df_fechas) == 0:
-        fig = go.Figure()
-        fig.add_annotation(text="No hay datos de fecha válidos", 
-                          xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
-        return fig
-    
-    df_fechas['FECHA_SOLO'] = df_fechas['FECHA_DT'].dt.date
-    
-    # Agrupar por fecha
-    tendencia = df_fechas.groupby('FECHA_SOLO').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum')
-    ).reset_index()
-    
-    tendencia['efectividad'] = (tendencia['liquidados'] / tendencia['total']) * 100
-    tendencia = tendencia.sort_values('FECHA_SOLO')
-    
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    
-    fig.add_trace(
-        go.Bar(
-            name='Total Órdenes', 
-            x=tendencia['FECHA_SOLO'], 
-            y=tendencia['total'],
-            marker_color='#667eea', 
-            opacity=0.7,
-            text=tendencia['total'],
-            textposition='outside'
-        ),
-        secondary_y=False
-    )
-    
-    fig.add_trace(
-        go.Scatter(
-            name='Efectividad %', 
-            x=tendencia['FECHA_SOLO'], 
-            y=tendencia['efectividad'],
-            mode='lines+markers+text', 
-            line=dict(color='#f5576c', width=3),
-            text=[f"{e:.0f}%" for e in tendencia['efectividad']],
-            textposition='top center'
-        ),
-        secondary_y=True
-    )
-    
-    fig.add_hline(y=65, line_dash="dash", line_color="green", 
-                  annotation_text="Meta 65%", secondary_y=True)
-    
-    fig.update_layout(
-        title=f"Tendencia de Órdenes y Efectividad ({len(tendencia)} días)",
-        height=450,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(tickformat='%d/%m', tickangle=-45)
-    )
-    
-    fig.update_yaxes(title_text="Cantidad de Órdenes", secondary_y=False)
-    fig.update_yaxes(title_text="Efectividad (%)", secondary_y=True, range=[0, 100])
-    
-    return fig
+def section_header(texto):
+    st.markdown(f'<div class="section-header">{texto}</div>', unsafe_allow_html=True)
 
 
-def crear_grafico_sub_status(df: pd.DataFrame, key_suffix: str = "") -> go.Figure:
-    """Crea gráfico de barras horizontales para SUB STATUS"""
-    df_sub = df[df['SUB STATUS'].notna() & (df['SUB STATUS'] != '')]
-    if len(df_sub) == 0:
-        fig = go.Figure()
-        fig.add_annotation(text="No hay datos de SUB STATUS", 
-                          xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
-        return fig
-    
-    sub_status_counts = df_sub['SUB STATUS'].value_counts().head(10)
-    
-    fig = go.Figure(data=[go.Bar(
-        y=sub_status_counts.index,
-        x=sub_status_counts.values,
-        orientation='h',
-        marker_color=px.colors.qualitative.Pastel[:len(sub_status_counts)],
-        text=sub_status_counts.values,
-        textposition='outside'
-    )])
-    
-    fig.update_layout(
-        title="Top 10 SUB STATUS",
-        xaxis_title="Cantidad",
-        yaxis_title="Sub Status",
-        height=400,
-        margin=dict(l=250)
-    )
-    
-    return fig
+def alert_box(texto, tipo="info"):
+    st.markdown(f'<div class="alert-wc alert-{tipo}">{texto}</div>', unsafe_allow_html=True)
 
 
-def crear_grafico_intentos(df: pd.DataFrame, key_suffix: str = "") -> go.Figure:
-    """Crea boxplot de intentos por STATUS"""
-    fig = px.box(
-        df, 
-        x='STATUS', 
-        y='NUM_INTENTOS',
-        color='STATUS',
-        title="Distribución de Intentos por STATUS"
-    )
-    
-    fig.update_layout(
-        xaxis_tickangle=-45,
-        height=450,
-        showlegend=False
-    )
-    
-    return fig
+def data_quality_badge(pct_fallo):
+    if pct_fallo == 0:
+        return '<span class="dq-badge dq-good">OK</span>'
+    elif pct_fallo < 5:
+        return f'<span class="dq-badge dq-warn">{pct_fallo:.1f}% con error</span>'
+    else:
+        return f'<span class="dq-badge dq-bad">{pct_fallo:.1f}% con error</span>'
 
-
-def crear_grafico_valor_status(df: pd.DataFrame, key_suffix: str = "") -> go.Figure:
-    """Crea gráfico de donut para valor económico por STATUS"""
-    valor_status = df.groupby('STATUS')['VALOR_NUM'].sum().reset_index()
-    valor_status = valor_status.sort_values('VALOR_NUM', ascending=False)
-    
-    fig = go.Figure(data=[go.Pie(
-        labels=valor_status['STATUS'],
-        values=valor_status['VALOR_NUM'],
-        hole=0.4,
-        textinfo='percent+label',
-        textposition='outside'
-    )])
-    
-    fig.update_layout(
-        title="Valor Económico por STATUS",
-        height=450
-    )
-    
-    return fig
-
-
-# ============================================================================
-# FUNCIONES DE DESCARGA
-# ============================================================================
 
 def convertir_df_a_csv(df: pd.DataFrame) -> bytes:
-    """Convierte DataFrame a bytes CSV para descarga"""
     return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
 
-def descargar_csv(df: pd.DataFrame, nombre_archivo: str, texto_boton: str = "📥 Descargar CSV", key: str = None):
-    """Crea botón de descarga para DataFrame"""
+def descargar_csv(df, nombre, texto="Descargar CSV", key=None):
     csv = convertir_df_a_csv(df)
     if key is None:
-        key = f"download_{nombre_archivo}_{uuid.uuid4().hex[:8]}"
-    st.download_button(
-        label=texto_boton,
-        data=csv,
-        file_name=nombre_archivo,
-        mime='text/csv',
-        key=key
+        key = f"dl_{nombre}_{uuid.uuid4().hex[:6]}"
+    st.download_button(label=texto, data=csv, file_name=nombre, mime='text/csv', key=key)
+
+
+# ============================================================================
+# GRAFICOS (con template WebCorp)
+# ============================================================================
+
+WC_TEMPLATE = dict(
+    layout=dict(
+        font=dict(family="Inter, sans-serif", color=WC['text']),
+        paper_bgcolor=WC['bg'],
+        plot_bgcolor=WC['bg'],
+        title_font=dict(size=14, color=WC['primary']),
+        margin=dict(t=50, b=40, l=40, r=20),
     )
+)
+
+def aplicar_tema(fig):
+    fig.update_layout(
+        font=dict(family="Inter, sans-serif", color=WC['text'], size=11),
+        paper_bgcolor=WC['bg'],
+        plot_bgcolor=WC['bg_light'],
+        title_font=dict(size=14, color=WC['primary']),
+    )
+    return fig
 
 
-# ============================================================================
-# COMPONENTES DE UI
-# ============================================================================
+def crear_grafico_status(df):
+    status_counts = df['STATUS'].value_counts()
+    colores = [WC['success'], WC['secondary'], WC['accent'], WC['warning'],
+               WC['danger'], WC['critical'], '#636E72', '#B2BEC3', '#DFE6E9',
+               '#74B9FF', '#A29BFE']
+    fig = go.Figure(data=[go.Pie(
+        labels=status_counts.index, values=status_counts.values,
+        hole=0.5, marker_colors=colores[:len(status_counts)],
+        textinfo='percent+label', textposition='outside',
+        textfont_size=10
+    )])
+    fig.update_layout(title="Distribucion por STATUS", showlegend=True,
+                      legend=dict(orientation="h", yanchor="bottom", y=-0.3), height=420)
+    return aplicar_tema(fig)
 
-def mostrar_kpi_card(titulo: str, valor: str, subtitulo: str = "", es_efectividad: bool = False, valor_num: float = 0, tipo: str = "normal"):
-    """Muestra una tarjeta KPI estilizada"""
-    if es_efectividad:
-        color_class = "metric-card-green" if valor_num >= 65 else "metric-card-red"
-    elif tipo == "warning":
-        color_class = "metric-card-orange"
-    elif tipo == "success":
-        color_class = "metric-card-green"
-    elif tipo == "danger":
-        color_class = "metric-card-red"
-    else:
-        color_class = "metric-card"
-    
-    st.markdown(f"""
-    <div class="{color_class}">
-        <h3 style="margin:0;font-size:0.9rem;">{titulo}</h3>
-        <h1 style="margin:10px 0;font-size:2rem;">{valor}</h1>
-        <p style="margin:0;font-size:0.8rem;opacity:0.9;">{subtitulo}</p>
-    </div>
-    """, unsafe_allow_html=True)
+
+def crear_grafico_tendencia(df):
+    df_f = df[df['FECHA_DT'].notna()].copy()
+    if len(df_f) == 0:
+        fig = go.Figure()
+        fig.add_annotation(text="Sin datos de fecha validos", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+        return fig
+
+    df_f['FECHA_SOLO'] = df_f['FECHA_DT'].dt.date
+    tend = df_f.groupby('FECHA_SOLO').agg(total=('ORDEN', 'count'), liquidados=('ES_LIQUIDADO', 'sum')).reset_index()
+    tend['efectividad'] = (tend['liquidados'] / tend['total']) * 100
+    tend = tend.sort_values('FECHA_SOLO')
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Bar(name='Ordenes', x=tend['FECHA_SOLO'], y=tend['total'],
+                         marker_color=WC['secondary'], opacity=0.7, text=tend['total'],
+                         textposition='outside'), secondary_y=False)
+    fig.add_trace(go.Scatter(name='Efectividad %', x=tend['FECHA_SOLO'], y=tend['efectividad'],
+                             mode='lines+markers', line=dict(color=WC['danger'], width=3),
+                             text=[f"{e:.0f}%" for e in tend['efectividad']],
+                             textposition='top center'), secondary_y=True)
+    fig.add_hline(y=65, line_dash="dash", line_color=WC['success'], annotation_text="Meta 65%", secondary_y=True)
+    fig.update_layout(title=f"Tendencia ({len(tend)} dias)", height=420,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                      xaxis=dict(tickformat='%d/%m', tickangle=-45))
+    fig.update_yaxes(title_text="Ordenes", secondary_y=False)
+    fig.update_yaxes(title_text="Efectividad (%)", secondary_y=True, range=[0, 100])
+    return aplicar_tema(fig)
 
 
 # ============================================================================
 # SECCIONES DEL DASHBOARD
 # ============================================================================
 
-def seccion_errores(errores: List[Dict]):
-    """Muestra la sección de errores de validación"""
-    st.error("⚠️ Se encontraron errores de validación. Corrija los datos antes de continuar.")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.metric("Total de errores", len(errores))
-    
-    with col2:
-        tipos_error = {}
-        for e in errores:
-            campo = e['campo']
-            tipos_error[campo] = tipos_error.get(campo, 0) + 1
-        
-        st.write("**Errores por campo:**")
-        for campo, count in sorted(tipos_error.items(), key=lambda x: -x[1]):
-            st.write(f"- {campo}: {count}")
-    
-    st.subheader("Detalle de errores")
-    
-    df_errores = pd.DataFrame(errores)
-    st.dataframe(df_errores, use_container_width=True, height=400)
-    
-    descargar_csv(df_errores, "errores_de_validacion.csv", key="download_errores")
+def seccion_calidad_datos(calidad: Dict, n_duplicados: int, n_filas_invalidas: int, n_total: int):
+    """Reporte de calidad de datos (modo permisivo)."""
+    section_header("Calidad de Datos")
+    cols = st.columns(5)
+    items = [
+        ("Fechas", calidad.get('pct_fecha_invalida', 0)),
+        ("Fecha Deposito", calidad.get('pct_fecha_deposito_invalida', 0)),
+        ("Valores (Q)", calidad.get('pct_valor_invalido', 0)),
+        ("Geo (sin dato)", calidad.get('pct_geo_sin_dato', 0)),
+    ]
+    for i, (label, pct) in enumerate(items):
+        with cols[i]:
+            badge = data_quality_badge(pct)
+            st.markdown(f"**{label}**: {badge}", unsafe_allow_html=True)
+    with cols[4]:
+        if n_duplicados > 0:
+            st.markdown(f'**Duplicados**: <span class="dq-badge dq-warn">{n_duplicados} removidos</span>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'**Duplicados**: <span class="dq-badge dq-good">0</span>', unsafe_allow_html=True)
 
 
-def seccion_dashboard_principal(df: pd.DataFrame):
-    """Muestra el dashboard principal con KPIs"""
+def seccion_dashboard_principal(df):
     kpis = obtener_kpis_generales(df)
-    
-    st.subheader("📊 KPIs Generales")
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        mostrar_kpi_card("Total Órdenes", f"{kpis['total_ordenes']:,}", "Órdenes cargadas")
-    
-    with col2:
-        mostrar_kpi_card("Liquidadas", f"{kpis['total_liquidadas']:,}", 
-                        f"Pendientes: {kpis['total_pendientes']:,}", tipo="success")
-    
-    with col3:
-        mostrar_kpi_card("Entregadas s/Liquidar", f"{kpis['total_entregadas_sin_liquidar']:,}", 
-                        f"Q{kpis['valor_entregado_sin_liquidar']:,.0f} por cobrar", tipo="warning")
-    
-    with col4:
-        mostrar_kpi_card("Efectividad", f"{kpis['efectividad']:.1f}%", 
-                        "Meta: ≥65%", es_efectividad=True, valor_num=kpis['efectividad'])
-    
-    with col5:
-        mostrar_kpi_card("Valor Liquidado", f"Q{kpis['valor_liquidado']:,.0f}", 
-                        f"En ruta: Q{kpis['valor_en_ruta']:,.0f}")
-    
-    st.markdown("---")
-    
-    # Alertas operativas
-    st.subheader("🚨 Alertas Operativas")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # Alerta Región Metropolitana Guatemala ≥2 días
+
+    section_header("KPIs Generales")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        kpi_card("Total Ordenes", f"{kpis['total_ordenes']:,}", "En sistema", "blue")
+    with c2:
+        kpi_card("Liquidadas", f"{kpis['total_liquidadas']:,}",
+                 f"Pendientes: {kpis['total_pendientes']:,}", "green")
+    with c3:
+        # FIX: Efectividad por cohorte
+        efect = kpis['efectividad_cohorte']
+        tipo_e = "green" if efect >= 65 else "red"
+        kpi_card("Efectividad (3+ dias)", f"{efect:.1f}%",
+                 f"Bruta: {kpis['efectividad_bruta']:.1f}% | Meta: 65%", tipo_e)
+    with c4:
+        kpi_card("Valor Liquidado", f"Q{kpis['valor_liquidado']:,.0f}",
+                 f"En ruta: Q{kpis['valor_en_ruta']:,.0f}", "blue")
+    with c5:
+        # FIX: "Entregado sin Liquidar" como ALERTA ROJA
+        n_esl = kpis['total_entregadas_sin_liquidar']
+        v_esl = kpis['valor_entregado_sin_liquidar']
+        tipo_esl = "critical" if v_esl > 5000 else "orange"
+        kpi_card("CARTERA VENCIDA", f"{n_esl} ordenes",
+                 f"Q{v_esl:,.0f} sin cobrar", tipo_esl)
+
+    # Alerta cartera vencida
+    if kpis['valor_entregado_sin_liquidar'] > 0:
+        alert_box(
+            f"CARTERA VENCIDA: {kpis['total_entregadas_sin_liquidar']} ordenes entregadas "
+            f"sin liquidar por Q{kpis['valor_entregado_sin_liquidar']:,.0f}. "
+            f"Esto NO es un estado intermedio, es dinero en la calle sin cobrar.",
+            "danger"
+        )
+
+    # Alertas operativas contextuales
+    section_header("Alertas Operativas")
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
         df_metro = df[(df['ES_METRO_GUATEMALA']) & (~df['ES_LIQUIDADO'])]
-        df_metro_alerta = df_metro[df_metro['EDAD_DIAS'] >= 2]
-        
-        total_metro_no_entregado = len(df_metro)
-        alerta_metro = len(df_metro_alerta)
-        pct_metro = (alerta_metro / total_metro_no_entregado * 100) if total_metro_no_entregado > 0 else 0
-        
-        st.markdown("#### 🏙️ Metro Guatemala ≥2 días")
-        st.metric("Órdenes", f"{alerta_metro} ({pct_metro:.1f}%)")
-        
-        if alerta_metro > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(df_metro_alerta[['ORDEN', 'FECHA', 'STATUS', 'SUB STATUS', 'DIRECCION', 'EDAD_DIAS']], 
-                           use_container_width=True, height=200)
-                descargar_csv(
-                    df_metro_alerta[['ORDEN', 'FECHA', 'STATUS', 'SUB STATUS', 'DIRECCION']],
-                    "alerta_metro_guatemala.csv",
-                    key="download_metro_alerta"
-                )
-    
-    with col2:
-        # Alerta General ≥3 días
-        df_general = df[~df['ES_LIQUIDADO']]
-        df_general_alerta = df_general[df_general['EDAD_DIAS'] >= 3]
-        
-        total_no_entregado = len(df_general)
-        alerta_general = len(df_general_alerta)
-        pct_general = (alerta_general / total_no_entregado * 100) if total_no_entregado > 0 else 0
-        
-        st.markdown("#### 🌎 General ≥3 días")
-        st.metric("Órdenes", f"{alerta_general} ({pct_general:.1f}%)")
-        
-        if alerta_general > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(df_general_alerta[['ORDEN', 'FECHA', 'STATUS', 'SUB STATUS', 'DIRECCION', 'EDAD_DIAS']], 
-                           use_container_width=True, height=200)
-                descargar_csv(
-                    df_general_alerta[['ORDEN', 'FECHA', 'STATUS', 'SUB STATUS', 'DIRECCION']],
-                    "alerta_general.csv",
-                    key="download_general_alerta"
-                )
-    
-    with col3:
-        # Entregados sin liquidar
-        df_entregados_sin_liq = df[df['ES_ENTREGADO']]
-        valor_sin_liq = df_entregados_sin_liq['VALOR_NUM'].sum()
-        
-        st.markdown("#### 💰 Entregados sin Liquidar")
-        st.metric("Órdenes", f"{len(df_entregados_sin_liq)}")
-        st.metric("Valor", f"Q{valor_sin_liq:,.0f}")
-        
-        if len(df_entregados_sin_liq) > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(df_entregados_sin_liq[['ORDEN', 'FECHA', 'CLIENTE', 'VALOR_NUM', 'DIRECCION']], 
-                           use_container_width=True, height=200)
-                descargar_csv(
-                    df_entregados_sin_liq[['ORDEN', 'FECHA', 'CLIENTE', 'VALOR_NUM', 'DIRECCION', 'STATUS']],
-                    "entregados_sin_liquidar.csv",
-                    key="download_entregados_sin_liq"
-                )
-    
+        df_metro_alerta = df_metro[df_metro['EDAD_DIAS'].notna() & (df_metro['EDAD_DIAS'] >= 2)]
+        pct = (len(df_metro_alerta) / len(df_metro) * 100) if len(df_metro) > 0 else 0
+        st.markdown("**Metro Guatemala 2+ dias**")
+        st.metric("Ordenes", f"{len(df_metro_alerta)} ({pct:.0f}%)")
+        if len(df_metro_alerta) > 0:
+            with st.expander("Detalle"):
+                st.dataframe(df_metro_alerta[['ORDEN','FECHA','STATUS','SUB STATUS','EDAD_DIAS']].head(50), height=200)
+
+    with c2:
+        df_gen = df[~df['ES_LIQUIDADO']]
+        df_gen_alerta = df_gen[df_gen['EDAD_DIAS'].notna() & (df_gen['EDAD_DIAS'] >= 3)]
+        pct_g = (len(df_gen_alerta) / len(df_gen) * 100) if len(df_gen) > 0 else 0
+        st.markdown("**General 3+ dias sin liquidar**")
+        st.metric("Ordenes", f"{len(df_gen_alerta)} ({pct_g:.0f}%)")
+
+    with c3:
+        # FIX: Alerta basada en % del total, no monto fijo
+        pct_pendiente = (kpis['valor_pendiente'] / kpis['valor_total'] * 100) if kpis['valor_total'] > 0 else 0
+        st.markdown("**Valor no liquidado**")
+        st.metric("% del total", f"{pct_pendiente:.1f}%", f"Q{kpis['valor_pendiente']:,.0f}")
+        if pct_pendiente > 60:
+            alert_box(f"Valor pendiente es {pct_pendiente:.0f}% del total. Revisar operacion.", "warning")
+
     st.markdown("---")
-    
-    # Gráficos principales
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        fig_status = crear_grafico_status(df)
-        st.plotly_chart(fig_status, use_container_width=True, key="chart_status_main")
-    
-    with col2:
-        fig_tendencia = crear_grafico_tendencia(df)
-        st.plotly_chart(fig_tendencia, use_container_width=True, key="chart_tendencia_main")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(crear_grafico_status(df), use_container_width=True, key="main_status")
+    with c2:
+        st.plotly_chart(crear_grafico_tendencia(df), use_container_width=True, key="main_tend")
 
 
-def seccion_reportes(df: pd.DataFrame):
-    """Muestra los reportes operativos y estratégicos"""
-    
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📈 Por Cliente/Asesor",
-        "🗺️ Geográfico", 
-        "📦 Productos",
-        "🔄 Intentos y Fallos",
-        "💰 Valor Económico",
-        "📅 Tendencias"
+def seccion_reportes(df):
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Cliente/Asesor", "Geografico", "Productos", "Intentos y Fallos", "Valor Economico"
     ])
-    
+
     with tab1:
         reporte_cliente_asesor(df)
-    
     with tab2:
         reporte_geografico(df)
-    
     with tab3:
         reporte_productos(df)
-    
     with tab4:
-        reporte_intentos_fallos(df)
-    
+        reporte_intentos(df)
     with tab5:
-        reporte_valor_economico(df)
-    
-    with tab6:
-        reporte_tendencias(df)
+        reporte_valor(df)
 
 
-def reporte_cliente_asesor(df: pd.DataFrame):
-    """Reporte de rendimiento por cliente y asesor"""
-    
-    st.subheader("📊 Efectividad por Cliente")
-    
-
-    #solo liquidados
-    efectividad_cliente = df.groupby('CLIENTE').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum'),
-        valor_total=('VALOR_NUM', 'sum')
+def reporte_cliente_asesor(df):
+    section_header("Efectividad por Cliente")
+    ec = df.groupby('CLIENTE').agg(
+        total=('ORDEN','count'), liquidados=('ES_LIQUIDADO','sum'),
+        valor_total=('VALOR_NUM','sum')
     ).reset_index()
-    
-    efectividad_cliente['efectividad'] = (efectividad_cliente['liquidados'] / efectividad_cliente['total']) * 100
-    efectividad_cliente['pendientes'] = efectividad_cliente['total'] - efectividad_cliente['liquidados']
-    efectividad_cliente = efectividad_cliente.sort_values('total', ascending=False)
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        fig = px.bar(
-            efectividad_cliente,
-            x='CLIENTE',
-            y='efectividad',
-            color='efectividad',
-            color_continuous_scale=['red', 'yellow', 'green'],
-            range_color=[0, 100],
-            title="Efectividad por Cliente",
-            text=[f"{e:.1f}%" for e in efectividad_cliente['efectividad']]
-        )
-        fig.add_hline(y=65, line_dash="dash", line_color="orange", annotation_text="Meta 65%")
-        st.plotly_chart(fig, use_container_width=True, key="chart_efect_cliente")
-    
-    with col2:
-        st.dataframe(efectividad_cliente[['CLIENTE', 'total', 'liquidados', 'efectividad']], 
-                    use_container_width=True)
-        descargar_csv(efectividad_cliente, "efectividad_cliente.csv", key="download_efect_cliente")
-    
+    ec['efectividad'] = (ec['liquidados'] / ec['total'] * 100)
+    ec = ec.sort_values('total', ascending=False)
+
+    c1, c2 = st.columns([2,1])
+    with c1:
+        fig = px.bar(ec, x='CLIENTE', y='efectividad', color='efectividad',
+                     color_continuous_scale=[[0, WC['danger']], [0.65, WC['warning']], [1, WC['success']]],
+                     range_color=[0,100], title="Efectividad por Cliente",
+                     text=[f"{e:.1f}%" for e in ec['efectividad']])
+        fig.add_hline(y=65, line_dash="dash", line_color=WC['warning'], annotation_text="Meta 65%")
+        st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="ec_bar")
+    with c2:
+        st.dataframe(ec[['CLIENTE','total','liquidados','efectividad']].round(1), use_container_width=True)
+        descargar_csv(ec, "efectividad_cliente.csv", key="dl_ec")
+
     st.markdown("---")
-    
-    st.subheader("👤 Rendimiento por Asesor")
-    
-    
-    efectividad_asesor = df.groupby('ASESOR').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum'),
-        promedio_intentos=('NUM_INTENTOS', 'mean')
+    section_header("Rendimiento por Asesor (min. 10 ordenes)")
+
+    # FIX: Filtro minimo de volumen para ranking de asesores
+    ea = df.groupby('ASESOR').agg(
+        total=('ORDEN','count'), liquidados=('ES_LIQUIDADO','sum'),
+        promedio_intentos=('NUM_INTENTOS','mean')
     ).reset_index()
-    
-    efectividad_asesor['efectividad'] = (efectividad_asesor['liquidados'] / efectividad_asesor['total']) * 100
-    efectividad_asesor['pendientes'] = efectividad_asesor['total'] - efectividad_asesor['liquidados']
-    efectividad_asesor = efectividad_asesor.sort_values('efectividad', ascending=False)
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        fig = px.bar(
-            efectividad_asesor.head(20),
-            x='ASESOR',
-            y=['liquidados', 'pendientes'],
-            title="Órdenes por Asesor (Top 20)",
-            barmode='stack',
-            color_discrete_map={'liquidados': '#28a745', 'pendientes': '#dc3545'}
-        )
-        st.plotly_chart(fig, use_container_width=True, key="chart_ordenes_asesor")
-    
-    with col2:
-        st.dataframe(efectividad_asesor[['ASESOR', 'total', 'efectividad', 'promedio_intentos']], 
-                    use_container_width=True)
-        descargar_csv(efectividad_asesor, "efectividad_asesor.csv", key="download_efect_asesor")
+    ea['efectividad'] = (ea['liquidados'] / ea['total'] * 100)
+    ea['pendientes'] = ea['total'] - ea['liquidados']
 
+    min_ordenes = 10
+    ea_filtrado = ea[ea['total'] >= min_ordenes].sort_values('efectividad', ascending=False)
+    ea_bajo_volumen = ea[ea['total'] < min_ordenes]
 
-def reporte_geografico(df: pd.DataFrame):
-    """Reporte geográfico por zona - CORREGIDO con filtros múltiples"""
-    
-    st.subheader("🗺️ Análisis Geográfico")
-    
-    # Filtros múltiples
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        departamentos = sorted(df['DEPARTAMENTO'].unique().tolist())
-        deptos_seleccionados = st.multiselect(
-            "Filtrar por Departamento(s):",
-            options=departamentos,
-            default=[],
-            key="filtro_departamentos"
-        )
-    
-    with col2:
-        if deptos_seleccionados:
-            zonas_disponibles = sorted(df[df['DEPARTAMENTO'].isin(deptos_seleccionados)]['GEO_KEY'].unique().tolist())
+    c1, c2 = st.columns([2,1])
+    with c1:
+        if len(ea_filtrado) > 0:
+            fig = px.bar(ea_filtrado.head(20), x='ASESOR', y=['liquidados','pendientes'],
+                         title=f"Ordenes por Asesor (min {min_ordenes} ordenes, Top 20)",
+                         barmode='stack', color_discrete_map={'liquidados': WC['success'], 'pendientes': WC['danger']})
+            st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="ea_bar")
         else:
-            zonas_disponibles = sorted(df['GEO_KEY'].unique().tolist())
-        
-        zonas_seleccionadas = st.multiselect(
-            "Filtrar por Zona(s):",
-            options=zonas_disponibles,
-            default=[],
-            key="filtro_zonas"
-        )
-    
-    # Aplicar filtros
-    df_filtrado = df.copy()
-    if deptos_seleccionados:
-        df_filtrado = df_filtrado[df_filtrado['DEPARTAMENTO'].isin(deptos_seleccionados)]
-    if zonas_seleccionadas:
-        df_filtrado = df_filtrado[df_filtrado['GEO_KEY'].isin(zonas_seleccionadas)]
-    
-    if len(df_filtrado) == 0:
-        st.warning("No hay datos con los filtros seleccionados.")
+            st.info("Ningun asesor alcanza el minimo de ordenes para ranking.")
+    with c2:
+        st.dataframe(ea_filtrado[['ASESOR','total','efectividad','promedio_intentos']].round(2), use_container_width=True)
+        if len(ea_bajo_volumen) > 0:
+            st.caption(f"{len(ea_bajo_volumen)} asesores con <{min_ordenes} ordenes excluidos del ranking.")
+        descargar_csv(ea, "efectividad_asesor.csv", key="dl_ea")
+
+
+def reporte_geografico(df):
+    section_header("Analisis Geografico")
+    c1, c2 = st.columns(2)
+    with c1:
+        deptos = sorted(df['DEPARTAMENTO'].unique().tolist())
+        deptos_sel = st.multiselect("Departamento(s):", deptos, default=[], key="geo_depto")
+    with c2:
+        if deptos_sel:
+            zonas_disp = sorted(df[df['DEPARTAMENTO'].isin(deptos_sel)]['GEO_KEY'].unique().tolist())
+        else:
+            zonas_disp = sorted(df['GEO_KEY'].unique().tolist())
+        zonas_sel = st.multiselect("Zona(s):", zonas_disp, default=[], key="geo_zona")
+
+    df_f = df.copy()
+    if deptos_sel:
+        df_f = df_f[df_f['DEPARTAMENTO'].isin(deptos_sel)]
+    if zonas_sel:
+        df_f = df_f[df_f['GEO_KEY'].isin(zonas_sel)]
+
+    if len(df_f) == 0:
+        st.warning("Sin datos con los filtros seleccionados.")
         return
-    
-    # Calcular efectividad por zona - CORREGIDO
-    efectividad_zona = df_filtrado.groupby('GEO_KEY').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum'),
-        valor_total=('VALOR_NUM', 'sum'),
-        promedio_intentos=('NUM_INTENTOS', 'mean')
+
+    ez = df_f.groupby('GEO_KEY').agg(
+        total=('ORDEN','count'), liquidados=('ES_LIQUIDADO','sum'),
+        valor_total=('VALOR_NUM','sum')
     ).reset_index()
-    
-    efectividad_zona['efectividad'] = (efectividad_zona['liquidados'] / efectividad_zona['total']) * 100
-    efectividad_zona['pendientes'] = efectividad_zona['total'] - efectividad_zona['liquidados']
-    efectividad_zona = efectividad_zona.sort_values('total', ascending=False)
-    
-    # Efectividad por departamento
-    efectividad_depto = df_filtrado.groupby('DEPARTAMENTO').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum'),
-        valor_total=('VALOR_NUM', 'sum')
-    ).reset_index()
-    
-    efectividad_depto['efectividad'] = (efectividad_depto['liquidados'] / efectividad_depto['total']) * 100
-    efectividad_depto = efectividad_depto.sort_values('total', ascending=False)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Gráfico de efectividad por zona
-        top_zonas = efectividad_zona.sort_values('efectividad', ascending=True).tail(15)
-        colors = ['#dc3545' if e < 65 else '#28a745' for e in top_zonas['efectividad']]
-        
+    ez['efectividad'] = (ez['liquidados'] / ez['total'] * 100)
+    ez = ez.sort_values('total', ascending=False)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        top = ez.sort_values('efectividad', ascending=True).tail(15)
+        colors = [WC['danger'] if e < 65 else WC['success'] for e in top['efectividad']]
         fig = go.Figure(data=[go.Bar(
-            y=top_zonas['GEO_KEY'],
-            x=top_zonas['efectividad'],
-            orientation='h',
-            marker_color=colors,
-            text=[f"{e:.1f}% (n={int(t)})" for e, t in zip(top_zonas['efectividad'], top_zonas['total'])],
-            textposition='outside'
-        )])
-        
-        fig.add_vline(x=65, line_dash="dash", line_color="orange", annotation_text="Meta 65%")
-        fig.update_layout(
-            title="Efectividad por Zona",
-            xaxis_title="Efectividad (%)",
-            height=500,
-            margin=dict(l=200)
-        )
-        st.plotly_chart(fig, use_container_width=True, key="chart_efect_zona")
-    
-    with col2:
-        # Treemap
-        fig = px.treemap(
-            efectividad_zona,
-            path=['GEO_KEY'],
-            values='total',
-            color='efectividad',
-            color_continuous_scale=['red', 'yellow', 'green'],
-            range_color=[0, 100],
-            title="Mapa de Calor por Zona"
-        )
-        st.plotly_chart(fig, use_container_width=True, key="chart_treemap_zona")
-    
-    # Efectividad por departamento
-    st.subheader("📍 Efectividad por Departamento")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        fig = px.bar(
-            efectividad_depto.head(15),
-            x='DEPARTAMENTO',
-            y='efectividad',
-            color='efectividad',
-            color_continuous_scale=['red', 'yellow', 'green'],
-            range_color=[0, 100],
-            title="Efectividad por Departamento",
-            text=[f"{e:.1f}%" for e in efectividad_depto.head(15)['efectividad']]
-        )
-        fig.add_hline(y=65, line_dash="dash", line_color="orange")
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True, key="chart_efect_depto")
-    
-    with col2:
-        st.dataframe(efectividad_depto, use_container_width=True)
-        descargar_csv(efectividad_depto, "efectividad_departamento.csv", key="download_efect_depto")
-    
+            y=top['GEO_KEY'], x=top['efectividad'], orientation='h', marker_color=colors,
+            text=[f"{e:.1f}% (n={int(t)})" for e, t in zip(top['efectividad'], top['total'])],
+            textposition='outside')])
+        fig.add_vline(x=65, line_dash="dash", line_color=WC['warning'], annotation_text="Meta 65%")
+        fig.update_layout(title="Efectividad por Zona", xaxis_title="Efectividad (%)", height=500, margin=dict(l=180))
+        st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="geo_zona_bar")
+    with c2:
+        # Scatter: volumen vs efectividad (mejor que treemap)
+        fig = px.scatter(ez, x='total', y='efectividad', size='valor_total', color='efectividad',
+                         color_continuous_scale=[[0, WC['danger']], [0.65, WC['warning']], [1, WC['success']]],
+                         range_color=[0,100], hover_name='GEO_KEY',
+                         title="Volumen vs Efectividad por Zona",
+                         labels={'total':'Ordenes','efectividad':'Efectividad %'})
+        fig.add_hline(y=65, line_dash="dash", line_color=WC['warning'])
+        st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="geo_scatter")
 
-def reporte_productos(df: pd.DataFrame):
-    """Reporte de análisis de productos"""
-    
-    st.subheader("📦 Análisis de Productos (REFERENCIA)")
-    
-    df_productos = df.copy()
-    df_productos['PRODUCTO'] = df_productos['REFERENCIA'].apply(
-        lambda x: str(x).split(',')[0].strip() if pd.notna(x) else 'SIN REFERENCIA'
-    )
-    
-    productos_stats = df_productos.groupby('PRODUCTO').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum'),
-        valor_total=('VALOR_NUM', 'sum')
+    st.dataframe(ez.round(1), use_container_width=True)
+    descargar_csv(ez, "efectividad_geografica.csv", key="dl_geo")
+
+
+def reporte_productos(df):
+    section_header("Analisis de Productos (REFERENCIA)")
+    ps = df.groupby('PRODUCTO').agg(
+        total=('ORDEN','count'), liquidados=('ES_LIQUIDADO','sum'), valor_total=('VALOR_NUM','sum')
     ).reset_index()
-    
-    productos_stats['efectividad'] = (productos_stats['liquidados'] / productos_stats['total']) * 100
-    productos_stats['valor_liquidado'] = df_productos[df_productos['ES_LIQUIDADO']].groupby(
-        df_productos[df_productos['ES_LIQUIDADO']]['PRODUCTO']
-    )['VALOR_NUM'].sum().reindex(productos_stats['PRODUCTO']).fillna(0).values
-    productos_stats['valor_pendiente'] = productos_stats['valor_total'] - productos_stats['valor_liquidado']
-    productos_stats = productos_stats.sort_values('total', ascending=False)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        fig = px.pie(
-            productos_stats.head(10),
-            values='total',
-            names='PRODUCTO',
-            title="Top 10 Productos por Cantidad",
-            hole=0.3
-        )
-        st.plotly_chart(fig, use_container_width=True, key="chart_pie_productos")
-    
-    with col2:
-        fig = px.bar(
-            productos_stats.head(10),
-            x='PRODUCTO',
-            y='efectividad',
-            color='efectividad',
-            color_continuous_scale=['red', 'yellow', 'green'],
-            range_color=[0, 100],
-            title="Efectividad por Producto (Top 10)",
-            text=[f"{e:.1f}%" for e in productos_stats.head(10)['efectividad']]
-        )
-        fig.add_hline(y=65, line_dash="dash", line_color="orange")
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True, key="chart_efect_productos")
-    
-    # Productos con más retornos
-    st.subheader("⚠️ Productos con más Retornos/Rechazos")
-    
-    df_retornos = df_productos[df_productos['STATUS'].isin(['RETORNADO A WEBCORP', 'EN RUTA PARA DEVOLUCION', 'RECHAZADO'])]
-    
-    if len(df_retornos) > 0:
-        retornos_producto = df_retornos.groupby('PRODUCTO').size().reset_index(name='retornos')
-        retornos_producto = retornos_producto.sort_values('retornos', ascending=False).head(10)
-        
-        fig = px.bar(
-            retornos_producto,
-            x='PRODUCTO',
-            y='retornos',
-            title="Top 10 Productos con más Retornos",
-            color='retornos',
-            color_continuous_scale='Reds',
-            text='retornos'
-        )
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True, key="chart_retornos_productos")
-    else:
-        st.info("No hay retornos registrados.")
-    
-    st.subheader("📋 Tabla de Productos")
-    st.dataframe(productos_stats, use_container_width=True)
-    descargar_csv(productos_stats, "analisis_productos.csv", key="download_productos")
+    ps['efectividad'] = (ps['liquidados'] / ps['total'] * 100)
+    ps = ps.sort_values('total', ascending=False)
 
-
-def reporte_intentos_fallos(df: pd.DataFrame):
-    """Reporte de intentos y razones de fallo"""
-    
-    st.subheader("🔄 Análisis de Intentos de Entrega")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        promedio_intentos = df['NUM_INTENTOS'].mean()
-        st.metric("Promedio de Intentos", f"{promedio_intentos:.2f}")
-    
-    with col2:
-        ordenes_reprogramadas = len(df[df['STATUS'] == 'REPROGRAMADO'])
-        pct_reprogramadas = (ordenes_reprogramadas / len(df)) * 100
-        st.metric("% Reprogramadas", f"{pct_reprogramadas:.1f}%")
-    
-    with col3:
-        ordenes_mas_2_intentos = len(df[df['NUM_INTENTOS'] > 2])
-        st.metric("Órdenes >2 Intentos", ordenes_mas_2_intentos)
-    
-    with col4:
-        ordenes_0_intentos = len(df[df['NUM_INTENTOS'] == 0])
-        st.metric("Sin Intentos (0)", ordenes_0_intentos)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        intentos_status = df.groupby('STATUS')['NUM_INTENTOS'].mean().reset_index()
-        intentos_status = intentos_status.sort_values('NUM_INTENTOS', ascending=True)
-        
-        fig = px.bar(
-            intentos_status,
-            y='STATUS',
-            x='NUM_INTENTOS',
-            orientation='h',
-            title="Promedio de Intentos por STATUS",
-            color='NUM_INTENTOS',
-            color_continuous_scale='Oranges',
-            text=[f"{i:.2f}" for i in intentos_status['NUM_INTENTOS']]
-        )
-        st.plotly_chart(fig, use_container_width=True, key="chart_intentos_status")
-    
-    with col2:
-        fig = crear_grafico_intentos(df)
-        st.plotly_chart(fig, use_container_width=True, key="chart_boxplot_intentos")
-    
-    # SUB STATUS con más intentos
-    st.subheader("📊 SUB STATUS con más Intentos")
-    
-    df_sub = df[df['SUB STATUS'].notna() & (df['SUB STATUS'] != '')]
-    if len(df_sub) > 0:
-        intentos_sub = df_sub.groupby('SUB STATUS').agg(
-            promedio_intentos=('NUM_INTENTOS', 'mean'),
-            total_ordenes=('ORDEN', 'count')
+    c1, c2 = st.columns(2)
+    with c1:
+        fig = px.bar(ps.head(10), x='PRODUCTO', y='efectividad', color='efectividad',
+                     color_continuous_scale=[[0, WC['danger']], [0.65, WC['warning']], [1, WC['success']]],
+                     range_color=[0,100], title="Efectividad por Producto (Top 10)",
+                     text=[f"{e:.1f}%" for e in ps.head(10)['efectividad']])
+        fig.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="prod_efect")
+    with c2:
+        # Friccion logistica por producto (MKT #7 simplificado)
+        fr = df.groupby('PRODUCTO').agg(
+            total=('ORDEN','count'),
+            retornos=('STATUS', lambda x: x.isin(['RETORNADO A WEBCORP','RECHAZADO','EN RUTA PARA DEVOLUCION']).sum()),
         ).reset_index()
-        
-        intentos_sub = intentos_sub[intentos_sub['promedio_intentos'] > 1].sort_values('promedio_intentos', ascending=False)
-        
-        if len(intentos_sub) > 0:
-            fig = px.bar(
-                intentos_sub.head(10),
-                x='SUB STATUS',
-                y='promedio_intentos',
-                title="SUB STATUS con Promedio >1 Intento",
-                color='total_ordenes',
-                color_continuous_scale='Blues',
-                text=[f"{i:.2f}" for i in intentos_sub.head(10)['promedio_intentos']]
-            )
+        fr['tasa_retorno'] = (fr['retornos'] / fr['total'] * 100)
+        fr = fr[fr['retornos'] > 0].sort_values('tasa_retorno', ascending=False).head(10)
+        if len(fr) > 0:
+            fig = px.bar(fr, x='PRODUCTO', y='tasa_retorno', title="Tasa de Retorno por Producto",
+                         color='tasa_retorno', color_continuous_scale='Reds', text=[f"{t:.1f}%" for t in fr['tasa_retorno']])
             fig.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True, key="chart_sub_intentos")
-    
-    # Órdenes con >2 intentos
-    st.subheader("⚠️ Órdenes con más de 2 Intentos")
-    
-    df_muchos_intentos = df[df['NUM_INTENTOS'] > 2]
-    
-    if len(df_muchos_intentos) > 0:
-        st.write(f"Total: **{len(df_muchos_intentos)}** órdenes")
-        st.dataframe(
-            df_muchos_intentos[['ORDEN', 'CLIENTE', 'STATUS', 'SUB STATUS', 'NUM_INTENTOS', 'DIRECCION']],
-            use_container_width=True,
-            height=300
-        )
-        descargar_csv(df_muchos_intentos, "ordenes_mas_2_intentos.csv", key="download_muchos_intentos")
-    else:
-        st.info("No hay órdenes con más de 2 intentos.")
+            st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="prod_retorno")
 
-    # Órdenes con 0 intentos
-    st.subheader("⚠️ Órdenes con 0 Intentos y más de 2 días en bodega")
-    #HOLIWIS REGRESAR
-    df_no_intentos_muchos_dias = df[(df['NUM_INTENTOS'] == 0) & (df['EDAD_DIAS'] >= 2) & (df['STATUS'] != "ENTREGADO")& (df['STATUS'] != "ENTREGADO LIQUIDADO")]
+    st.dataframe(ps.round(1), use_container_width=True)
+    descargar_csv(ps, "analisis_productos.csv", key="dl_prod")
 
-    if len(df_no_intentos_muchos_dias) > 0:
-        st.write(f"Total: **{len(df_no_intentos_muchos_dias)}** órdenes")
-        st.dataframe(
-            df_no_intentos_muchos_dias[['ORDEN', 'CLIENTE', 'STATUS', 'SUB STATUS', 'NUM_INTENTOS','EDAD_DIAS', 'DIRECCION']],
-            use_container_width=True,
-            height=300
-        )
-        descargar_csv(df_no_intentos_muchos_dias, "ordenes_0_intentos_+2_dias.csv", key="df_no_intentos_muchos_dias")
-    else:
-        st.info("No hay órdenes con más de 2 intentos.")
 
-def reporte_valor_economico(df: pd.DataFrame):
-    """Reporte de valor económico - EXTENDIDO"""
-    
-    st.subheader("💰 Análisis de Valor Económico")
-    
+def reporte_intentos(df):
+    section_header("Analisis de Intentos de Entrega")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Promedio Intentos", f"{df['NUM_INTENTOS'].mean():.2f}")
+    with c2:
+        pct_rep = (df['STATUS'] == 'REPROGRAMADO').mean() * 100
+        st.metric("% Reprogramadas", f"{pct_rep:.1f}%")
+    with c3:
+        st.metric("Ordenes >2 intentos", len(df[df['NUM_INTENTOS'] > 2]))
+    with c4:
+        n_sin = len(df[(df['NUM_INTENTOS'] == 0) & (df['EDAD_DIAS'].notna()) & (df['EDAD_DIAS'] >= 2) & (~df['ES_ENTREGADO_O_LIQUIDADO'])])
+        st.metric("0 intentos + 2 dias", n_sin)
+
+    # Curva de conversion por intento (FIX: reemplaza boxplot tautologico)
+    section_header("Curva de Conversion por Intento")
+    conv = df.groupby('NUM_INTENTOS').agg(
+        total=('ORDEN','count'), liquidados=('ES_LIQUIDADO','sum')
+    ).reset_index()
+    conv['tasa_exito'] = (conv['liquidados'] / conv['total'] * 100)
+    conv = conv[conv['NUM_INTENTOS'] <= 5]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=conv['NUM_INTENTOS'], y=conv['total'], name='Ordenes',
+                         marker_color=WC['secondary'], opacity=0.6, yaxis='y'))
+    fig.add_trace(go.Scatter(x=conv['NUM_INTENTOS'], y=conv['tasa_exito'], name='% Liquidacion',
+                             mode='lines+markers+text', line=dict(color=WC['success'], width=3),
+                             text=[f"{t:.0f}%" for t in conv['tasa_exito']], textposition='top center', yaxis='y2'))
+    fig.update_layout(
+        title="Tasa de Liquidacion por Numero de Intentos",
+        xaxis_title="Intentos", yaxis=dict(title="Ordenes"),
+        yaxis2=dict(title="% Liquidacion", overlaying='y', side='right', range=[0,100]),
+        height=400, legend=dict(orientation="h", y=1.1))
+    st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="conv_curva")
+
+    # Ordenes 0 intentos y 2+ dias
+    df_fantasma = df[(df['NUM_INTENTOS'] == 0) & (df['EDAD_DIAS'].notna()) & (df['EDAD_DIAS'] >= 2) & (~df['ES_ENTREGADO_O_LIQUIDADO'])]
+    if len(df_fantasma) > 0:
+        alert_box(f"{len(df_fantasma)} ordenes con 0 intentos y 2+ dias en bodega. Estas ordenes no se estan trabajando.", "danger")
+        st.dataframe(df_fantasma[['ORDEN','CLIENTE','STATUS','SUB STATUS','EDAD_DIAS','DIRECCION']].head(50), height=250)
+        descargar_csv(df_fantasma, "ordenes_0_intentos_2dias.csv", key="dl_fantasma")
+
+
+def reporte_valor(df):
+    section_header("Analisis de Valor Economico")
     kpis = obtener_kpis_generales(df)
-    
-    # KPIs principales
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        st.metric("💵 Valor Total", f"Q{kpis['valor_total']:,.0f}")
-    
-    with col2:
-        st.metric("✅ Valor Liquidado", f"Q{kpis['valor_liquidado']:,.0f}")
-    
-    with col3:
-        st.metric("📦 Entregado s/Liquidar", f"Q{kpis['valor_entregado_sin_liquidar']:,.0f}")
-    
-    with col4:
-        st.metric("🚚 Valor en Ruta", f"Q{kpis['valor_en_ruta']:,.0f}")
-    
-    with col5:
-        st.metric("⏳ Valor No Entregado/Sin Liquidar", f"Q{kpis['valor_pendiente']:,.0f}")
-    
-    # Alerta de valor pendiente alto
-    if kpis['valor_pendiente'] > 10000:
-        st.warning(f"⚠️ **ALERTA**: Valor de 'No Entregados' superior a Q10,000 (Q{kpis['valor_pendiente']:,.0f})")
-    
-    st.markdown("---")
-    
-    # Análisis detallado
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        fig = crear_grafico_valor_status(df)
-        st.plotly_chart(fig, use_container_width=True, key="chart_valor_status")
-    
-    with col2:
-        # Valor por zona
-        valor_zona = df.groupby('GEO_KEY').agg(
-            valor_total=('VALOR_NUM', 'sum'),
-            valor_liquidado=('VALOR_NUM', lambda x: x[df.loc[x.index, 'ES_LIQUIDADO']].sum() if len(x) > 0 else 0)
-        ).reset_index()
-        valor_zona['valor_pendiente'] = valor_zona['valor_total'] - valor_zona['valor_liquidado']
-        valor_zona = valor_zona.sort_values('valor_total', ascending=False).head(10)
-        
-        fig = px.bar(
-            valor_zona,
-            x='GEO_KEY',
-            y=['valor_liquidado', 'valor_pendiente'],
-            title="Valor por Zona (Top 10)",
-            barmode='stack',
-            color_discrete_map={'valor_liquidado': '#28a745', 'valor_entregado_sin_liquidar': '#dc3545'}
-        )
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True, key="chart_valor_zona")
-    
-    st.markdown("---")
-    
-    # Sección: Entregados sin Liquidar (NUEVO)
-    st.subheader("📦 Detalle: Entregados sin Liquidar")
-    
-    df_entregados = df[df['ES_ENTREGADO']].copy()
-    
-    if len(df_entregados) > 0:
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Órdenes", len(df_entregados))
-        with col2:
-            st.metric("Valor Total", f"Q{df_entregados['VALOR_NUM'].sum():,.0f}")
-        with col3:
-            promedio = df_entregados['VALOR_NUM'].mean()
-            st.metric("Valor Promedio", f"Q{promedio:,.0f}")
-        
-        # Por cliente
-        entregados_cliente = df_entregados.groupby('CLIENTE').agg(
-            cantidad=('ORDEN', 'count'),
-            valor=('VALOR_NUM', 'sum')
-        ).reset_index().sort_values('valor', ascending=False)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig = px.pie(
-                entregados_cliente,
-                values='valor',
-                names='CLIENTE',
-                title="Valor Entregado sin Liquidar por Cliente",
-                hole=0.4
-            )
-            st.plotly_chart(fig, use_container_width=True, key="chart_entregados_cliente")
-        
-        with col2:
-            st.dataframe(entregados_cliente, use_container_width=True)
-        
-        st.subheader("📋 Listado de Órdenes Entregadas sin Liquidar")
-        st.dataframe(
-            df_entregados[['ORDEN', 'CLIENTE', 'FECHA', 'VALOR_NUM', 'DESTINATARIO', 'DIRECCION', 'ASESOR']],
-            use_container_width=True,
-            height=300
-        )
-        descargar_csv(df_entregados, "entregados_sin_liquidar_detalle.csv", key="download_entregados_detalle")
-    else:
-        st.success("✅ No hay órdenes entregadas pendientes de liquidar.")
-    
-    st.markdown("---")
-    
-    # Valor en retornos
-    st.subheader("💸 Valor en Retornos y Rechazos")
-    
-    df_retornos = df[df['STATUS'].isin(['RETORNADO A WEBCORP', 'EN RUTA PARA DEVOLUCION', 'RECHAZADO'])]
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if len(df_retornos) > 0:
-            valor_retornos = df_retornos['VALOR_NUM'].sum()
-            st.metric("Valor Total en Retornos/Rechazos", f"Q{valor_retornos:,.0f}")
-            st.metric("Órdenes en Retorno/Rechazo", len(df_retornos))
-            
-            retornos_status = df_retornos.groupby('STATUS')['VALOR_NUM'].sum().reset_index()
-            fig = px.pie(
-                retornos_status,
-                values='VALOR_NUM',
-                names='STATUS',
-                title="Distribución del Valor en Retornos",
-                hole=0.4
-            )
-            st.plotly_chart(fig, use_container_width=True, key="chart_valor_retornos")
-        else:
-            st.success("✅ No hay órdenes en retorno.")
-    
-    with col2:
-        if len(df_retornos) > 0:
-            st.dataframe(
-                df_retornos[['ORDEN', 'CLIENTE', 'STATUS', 'VALOR_NUM', 'GEO_KEY']],
-                use_container_width=True,
-                height=300
-            )
-            descargar_csv(df_retornos, "ordenes_retorno_valor.csv", key="download_retornos_valor")
-    
-    st.markdown("---")
-    
-    # Análisis de recuperación potencial
-    st.subheader("📈 Análisis de Recuperación Potencial")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    # En Gestión
-    df_en_gestion = df[df['STATUS'] == 'EN GESTION']
-    with col1:
-        st.markdown("**En Gestión**")
-        st.metric("Órdenes", len(df_en_gestion))
-        st.metric("Valor Potencial", f"Q{df_en_gestion['VALOR_NUM'].sum():,.0f}")
-    
-    # Reprogramados
-    df_reprogramados = df[df['STATUS'] == 'REPROGRAMADO']
-    with col2:
-        st.markdown("**Reprogramados**")
-        st.metric("Órdenes", len(df_reprogramados))
-        st.metric("Valor Potencial", f"Q{df_reprogramados['VALOR_NUM'].sum():,.0f}")
-    
-    # Ilocalizables
-    df_ilocalizables = df[df['STATUS'] == 'ILOCALIZABLE']
-    with col3:
-        st.markdown("**Ilocalizables**")
-        st.metric("Órdenes", len(df_ilocalizables))
-        st.metric("Valor en Riesgo", f"Q{df_ilocalizables['VALOR_NUM'].sum():,.0f}")
-    
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("Valor Total", f"Q{kpis['valor_total']:,.0f}")
+    with c2:
+        st.metric("Liquidado", f"Q{kpis['valor_liquidado']:,.0f}")
+    with c3:
+        st.metric("Entregado s/Liq", f"Q{kpis['valor_entregado_sin_liquidar']:,.0f}")
+    with c4:
+        st.metric("En Ruta", f"Q{kpis['valor_en_ruta']:,.0f}")
+    with c5:
+        st.metric("Pendiente", f"Q{kpis['valor_pendiente']:,.0f}")
+
+    # Lead Time (FIX: FECHA DEPOSITO ahora se usa)
+    section_header("Lead Time: Deposito a Liquidacion")
+    df_lt = df[df['LEAD_TIME'].notna() & (df['LEAD_TIME'] >= 0)]
+    if len(df_lt) > 0:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Lead Time Promedio", f"{df_lt['LEAD_TIME'].mean():.1f} dias")
+            fig = px.histogram(df_lt, x='LEAD_TIME', nbins=15, title="Distribucion de Lead Time (dias)",
+                               color_discrete_sequence=[WC['secondary']])
+            st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="lt_hist")
+        with c2:
+            # Lead time vs tasa de rechazo (MKT #2)
+            df_lt_bucket = df[df['LEAD_TIME'].notna()].copy()
+            df_lt_bucket['LT_BUCKET'] = pd.cut(df_lt_bucket['LEAD_TIME'], bins=[-1, 2, 4, 7, 14, 100],
+                                                labels=['0-2d', '3-4d', '5-7d', '8-14d', '15+d'])
+            if df_lt_bucket['LT_BUCKET'].notna().any():
+                lt_rej = df_lt_bucket.groupby('LT_BUCKET', observed=True).agg(
+                    ordenes=('ORDEN','count'),
+                    rechazos=('STATUS', lambda x: (x.isin(['RECHAZADO','RETORNADO A WEBCORP'])).sum())
+                ).reset_index()
+                lt_rej['tasa_rechazo'] = (lt_rej['rechazos'] / lt_rej['ordenes'] * 100)
+                fig = px.bar(lt_rej, x='LT_BUCKET', y='tasa_rechazo',
+                             title="Tasa de Rechazo por Lead Time",
+                             text=[f"{t:.1f}%" for t in lt_rej['tasa_rechazo']],
+                             color='tasa_rechazo', color_continuous_scale='Reds')
+                st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="lt_rechazo")
+
     # Resumen ejecutivo
-    st.markdown("---")
-    st.subheader("📊 Resumen Ejecutivo de Valor")
-    
+    section_header("Resumen Ejecutivo de Valor")
+    df_retornos = df[df['STATUS'].isin(['RETORNADO A WEBCORP','EN RUTA PARA DEVOLUCION','RECHAZADO'])]
     resumen = pd.DataFrame({
-        'Concepto': [
-            'Valor Total en Sistema',
-            'Valor Liquidado (Cobrado)',
-            'Valor Entregado sin Liquidar',
-            'Valor en Ruta',
-            'Valor en Gestión',
-            'Valor Reprogramado',
-            'Valor Ilocalizable',
-            'Valor en Retorno/Rechazo'
-        ],
+        'Concepto': ['Valor Total', 'Liquidado', 'Entregado sin Liquidar', 'En Ruta',
+                     'En Gestion', 'Reprogramado', 'Ilocalizable', 'Retorno/Rechazo'],
         'Monto (Q)': [
-            kpis['valor_total'],
-            kpis['valor_liquidado'],
-            kpis['valor_entregado_sin_liquidar'],
+            kpis['valor_total'], kpis['valor_liquidado'], kpis['valor_entregado_sin_liquidar'],
             kpis['valor_en_ruta'],
-            df_en_gestion['VALOR_NUM'].sum(),
-            df_reprogramados['VALOR_NUM'].sum(),
-            df_ilocalizables['VALOR_NUM'].sum(),
-            df_retornos['VALOR_NUM'].sum() if len(df_retornos) > 0 else 0
+            df.loc[df['STATUS']=='EN GESTION','VALOR_NUM'].sum(),
+            df.loc[df['STATUS']=='REPROGRAMADO','VALOR_NUM'].sum(),
+            df.loc[df['STATUS']=='ILOCALIZABLE','VALOR_NUM'].sum(),
+            df_retornos['VALOR_NUM'].sum()
         ]
     })
-    
-    resumen['% del Total'] = (resumen['Monto (Q)'] / kpis['valor_total'] * 100).round(1)
+    resumen['% del Total'] = (resumen['Monto (Q)'] / kpis['valor_total'] * 100).round(1) if kpis['valor_total'] > 0 else 0
     resumen['Monto (Q)'] = resumen['Monto (Q)'].apply(lambda x: f"Q{x:,.0f}")
-    
     st.dataframe(resumen, use_container_width=True)
-    descargar_csv(resumen, "resumen_valor_economico.csv", key="download_resumen_valor")
-
-
-def reporte_tendencias(df: pd.DataFrame):
-    """Reporte de tendencias temporales - CORREGIDO"""
-    
-    st.subheader("📅 Tendencias Temporales")
-    
-    df_fechas = df[df['FECHA_DT'].notna()].copy()
-    
-    if len(df_fechas) == 0:
-        st.warning("No hay datos de fecha válidos para mostrar tendencias.")
-        return
-    
-    df_fechas['FECHA_SOLO'] = df_fechas['FECHA_DT'].dt.date
-    df_fechas['SEMANA'] = df_fechas['FECHA_DT'].dt.isocalendar().week
-    df_fechas['DIA_SEMANA'] = df_fechas['FECHA_DT'].dt.day_name()
-    
-    # Mostrar rango de fechas
-    fecha_min = df_fechas['FECHA_SOLO'].min()
-    fecha_max = df_fechas['FECHA_SOLO'].max()
-    dias_unicos = df_fechas['FECHA_SOLO'].nunique()
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Fecha más antigua", fecha_min.strftime('%d/%m/%Y'))
-    with col2:
-        st.metric("Fecha más reciente", fecha_max.strftime('%d/%m/%Y'))
-    with col3:
-        st.metric("Días con órdenes", dias_unicos)
-    
-    # Tendencia diaria - CORREGIDO
-    st.subheader("📈 Tendencia Diaria")
-    
-    tendencia = df_fechas.groupby('FECHA_SOLO').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum')
-    ).reset_index()
-    tendencia['efectividad'] = (tendencia['liquidados'] / tendencia['total']) * 100
-    tendencia = tendencia.sort_values('FECHA_SOLO')
-    
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    
-    fig.add_trace(
-        go.Bar(
-            name='Total Órdenes', 
-            x=tendencia['FECHA_SOLO'], 
-            y=tendencia['total'],
-            marker_color='#667eea', 
-            opacity=0.7,
-            text=tendencia['total'],
-            textposition='outside'
-        ),
-        secondary_y=False
-    )
-    
-    fig.add_trace(
-        go.Scatter(
-            name='Efectividad %', 
-            x=tendencia['FECHA_SOLO'], 
-            y=tendencia['efectividad'],
-            mode='lines+markers+text', 
-            line=dict(color='#f5576c', width=3),
-            text=[f"{e:.0f}%" for e in tendencia['efectividad']],
-            textposition='top center'
-        ),
-        secondary_y=True
-    )
-    
-    fig.add_hline(y=65, line_dash="dash", line_color="green", 
-                  annotation_text="Meta 65%", secondary_y=True)
-    
-    fig.update_layout(
-        title=f"Órdenes y Efectividad por Día ({len(tendencia)} días)",
-        height=450,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(tickformat='%d/%m', tickangle=-45)
-    )
-    
-    fig.update_yaxes(title_text="Cantidad de Órdenes", secondary_y=False)
-    fig.update_yaxes(title_text="Efectividad (%)", secondary_y=True, range=[0, 100])
-    
-    st.plotly_chart(fig, use_container_width=True, key="chart_tendencia_diaria_report")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Efectividad semanal
-        semanal = df_fechas.groupby('SEMANA').agg(
-            total=('ORDEN', 'count'),
-            liquidados=('ES_LIQUIDADO', 'sum')
-        ).reset_index()
-        semanal['efectividad'] = (semanal['liquidados'] / semanal['total']) * 100
-        
-        fig = px.line(
-            semanal,
-            x='SEMANA',
-            y='efectividad',
-            title="Efectividad por Semana",
-            markers=True,
-            text=[f"{e:.0f}%" for e in semanal['efectividad']]
-        )
-        fig.add_hline(y=65, line_dash="dash", line_color="red", annotation_text="Meta")
-        fig.update_traces(textposition='top center')
-        st.plotly_chart(fig, use_container_width=True, key="chart_efectividad_semanal")
-    
-    with col2:
-        # Órdenes por día de la semana
-        dia_semana = df_fechas.groupby('DIA_SEMANA').agg(
-            total=('ORDEN', 'count'),
-            liquidados=('ES_LIQUIDADO', 'sum')
-        ).reset_index()
-        dia_semana['efectividad'] = (dia_semana['liquidados'] / dia_semana['total']) * 100
-        
-        # Ordenar días
-        orden_dias = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        dia_semana['orden'] = dia_semana['DIA_SEMANA'].apply(lambda x: orden_dias.index(x) if x in orden_dias else 7)
-        dia_semana = dia_semana.sort_values('orden')
-        
-        fig = px.bar(
-            dia_semana,
-            x='DIA_SEMANA',
-            y='total',
-            title="Órdenes por Día de la Semana",
-            color='efectividad',
-            color_continuous_scale=['red', 'yellow', 'green'],
-            text='total'
-        )
-        st.plotly_chart(fig, use_container_width=True, key="chart_dia_semana")
-    
-    # Antigüedad de no entregados
-    st.subheader("⏰ Antigüedad de Órdenes No Liquidadas")
-    
-    df_no_liquidados = df[~df['ES_LIQUIDADO']]
-    
-    if len(df_no_liquidados) > 0:
-        promedio_antiguedad = df_no_liquidados['EDAD_DIAS'].mean()
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.metric("Antigüedad Promedio", f"{promedio_antiguedad:.1f} días")
-            
-            fig = px.histogram(
-                df_no_liquidados,
-                x='EDAD_DIAS',
-                title="Distribución de Antigüedad (No Liquidados)",
-                nbins=20,
-                color_discrete_sequence=['#f5576c']
-            )
-            st.plotly_chart(fig, use_container_width=True, key="chart_hist_antiguedad")
-        
-        with col2:
-            fig = px.box(
-                df_no_liquidados,
-                x='STATUS',
-                y='EDAD_DIAS',
-                title="Antigüedad por STATUS",
-                color='STATUS'
-            )
-            fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-            st.plotly_chart(fig, use_container_width=True, key="chart_box_antiguedad")
-
-
-def seccion_alertas_avanzadas(df: pd.DataFrame):
-    """Dashboard de alertas avanzadas"""
-    
-    st.subheader("🚨 Alertas Avanzadas")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        ordenes_3_intentos = df[df['NUM_INTENTOS'] >= 3]
-        
-        st.markdown("### ⚠️ ≥3 Intentos")
-        st.metric("Cantidad", len(ordenes_3_intentos))
-        
-        if len(ordenes_3_intentos) > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(ordenes_3_intentos[['ORDEN', 'CLIENTE', 'STATUS', 'NUM_INTENTOS', 'EDAD_DIAS']], height=200)
-                descargar_csv(ordenes_3_intentos, "ordenes_3_mas_intentos.csv", key="download_3_intentos")
-    
-    with col2:
-        df_rechazos = df[df['STATUS'] == 'RECHAZADO']
-        rechazos_cliente = df_rechazos.groupby('CLIENTE').size().reset_index(name='rechazos')
-        rechazos_cliente = rechazos_cliente[rechazos_cliente['rechazos'] > 1]
-        
-        st.markdown("### ❌ Rechazos Recurrentes")
-        st.metric("Clientes Afectados", len(rechazos_cliente))
-        
-        if len(rechazos_cliente) > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(rechazos_cliente, height=200)
-                descargar_csv(rechazos_cliente, "clientes_rechazos_recurrentes.csv", key="download_rechazos_rec")
-    
-    with col3:
-        ordenes_antiguas_gestion = df[
-            (df['STATUS'] == 'EN GESTION') & 
-            (df['EDAD_DIAS'] >= 5)
-        ]
-        
-        st.markdown("### ⏰ Antiguas en Gestión")
-        st.metric("≥5 días", len(ordenes_antiguas_gestion))
-        
-        if len(ordenes_antiguas_gestion) > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(ordenes_antiguas_gestion[['ORDEN', 'CLIENTE', 'EDAD_DIAS', 'STATUS','SUB STATUS']], height=200)
-                descargar_csv(ordenes_antiguas_gestion, "ordenes_antiguas_gestion.csv", key="download_antiguas")
-    
-    st.markdown("---")
-    
-    # Segunda fila de alertas
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        ordenes_muy_antiguas = df[(~df['ES_LIQUIDADO']) & (df['EDAD_DIAS'] >= 7)]
-        
-        st.markdown("### 🕐 ≥7 días sin Liquidar")
-        st.metric("Cantidad", len(ordenes_muy_antiguas))
-        st.metric("Valor en Riesgo", f"Q{ordenes_muy_antiguas['VALOR_NUM'].sum():,.0f}")
-        
-        if len(ordenes_muy_antiguas) > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(ordenes_muy_antiguas[['ORDEN', 'CLIENTE', 'STATUS', 'EDAD_DIAS', 'VALOR_NUM']], height=200)
-                descargar_csv(ordenes_muy_antiguas, "ordenes_muy_antiguas.csv", key="download_muy_antiguas")
-    
-    with col2:
-        df_ilocalizables = df[df['STATUS'] == 'ILOCALIZABLE']
-        
-        st.markdown("### 📍 Ilocalizables")
-        st.metric("Cantidad", len(df_ilocalizables))
-        st.metric("Valor", f"Q{df_ilocalizables['VALOR_NUM'].sum():,.0f}")
-        
-        if len(df_ilocalizables) > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(df_ilocalizables[['ORDEN', 'CLIENTE', 'SUB STATUS', 'EDAD_DIAS', 'VALOR_NUM']], height=200)
-                descargar_csv(df_ilocalizables, "ordenes_ilocalizables.csv", key="download_ilocalizables")
-    
-    with col3:
-        df_fuera_cob = df[df['STATUS'] == 'FUERA DE COBERTURA']
-        
-        st.markdown("### 🚫 Fuera de Cobertura")
-        st.metric("Cantidad", len(df_fuera_cob))
-        st.metric("Valor", f"Q{df_fuera_cob['VALOR_NUM'].sum():,.0f}")
-        
-        if len(df_fuera_cob) > 0:
-            with st.expander("Ver detalle"):
-                st.dataframe(df_fuera_cob[['ORDEN', 'CLIENTE', 'GEO_KEY', 'VALOR_NUM']], height=200)
-                descargar_csv(df_fuera_cob, "ordenes_fuera_cobertura.csv", key="download_fuera_cob")
-    
-    st.markdown("---")
-    
-    # Resumen de alertas
-    st.subheader("📋 Resumen de Alertas Críticas")
-    
-    alertas = []
-    
-    # Alertas de efectividad por zona
-    efectividad_zona = df.groupby('GEO_KEY').agg(
-        total=('ORDEN', 'count'),
-        liquidados=('ES_LIQUIDADO', 'sum')
-    ).reset_index()
-    efectividad_zona['efectividad'] = (efectividad_zona['liquidados'] / efectividad_zona['total']) * 100
-    
-    zonas_criticas = efectividad_zona[(efectividad_zona['efectividad'] < 50) & (efectividad_zona['total'] >= 10)]
-    for _, row in zonas_criticas.iterrows():
-        alertas.append({
-            'Tipo': '🔴 Efectividad Crítica',
-            'Detalle': f"Zona: {row['GEO_KEY']}",
-            'Valor': f"{row['efectividad']:.1f}% ({int(row['total'])} órdenes)",
-            'Severidad': 'Alta'
-        })
-    
-    # Alerta de valor pendiente
-    kpis = obtener_kpis_generales(df)
-    if kpis['valor_pendiente'] > 50000:
-        alertas.append({
-            'Tipo': '💰 Valor Pendiente Muy Alto',
-            'Detalle': 'Total general',
-            'Valor': f"Q{kpis['valor_pendiente']:,.0f}",
-            'Severidad': 'Alta'
-        })
-    
-    # Alerta de entregados sin liquidar
-    if kpis['valor_entregado_sin_liquidar'] > 10000:
-        alertas.append({
-            'Tipo': '📦 Valor Entregado sin Liquidar',
-            'Detalle': f"{kpis['total_entregadas_sin_liquidar']} órdenes",
-            'Valor': f"Q{kpis['valor_entregado_sin_liquidar']:,.0f}",
-            'Severidad': 'Media'
-        })
-    
-    # Alerta de órdenes muy antiguas
-    if len(ordenes_muy_antiguas) > 0:
-        alertas.append({
-            'Tipo': '🕐 Órdenes Muy Antiguas',
-            'Detalle': '≥7 días sin liquidar',
-            'Valor': f"{len(ordenes_muy_antiguas)} órdenes",
-            'Severidad': 'Alta'
-        })
-    
-    if alertas:
-        df_alertas = pd.DataFrame(alertas)
-        st.dataframe(df_alertas, use_container_width=True)
-        descargar_csv(df_alertas, "resumen_alertas.csv", key="download_resumen_alertas")
-    else:
-        st.success("✅ No hay alertas críticas activas.")
-
-
-def seccion_filtros_personalizados(df: pd.DataFrame):
-    """Dashboard personalizado con filtros"""
-    
-    st.subheader("🔍 Dashboard Personalizado")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        clientes = sorted(df['CLIENTE'].dropna().unique().tolist())
-        cliente_sel = st.multiselect(
-            "Cliente:",
-            options=clientes,
-            default=clientes,
-            key="filtro_cliente_pers"
-        )
-    
-    with col2:
-        asesores = ['Todos'] + sorted(df['ASESOR'].astype(str).unique().tolist())
-        asesor_sel = st.selectbox("Asesor:", asesores, key="filtro_asesor_pers")
-    
-    with col3:
-        status_list = sorted(df['STATUS'].dropna().unique().tolist())
-        status_sel = st.multiselect(
-            "Status:",
-            options=status_list,
-            default=status_list,
-            key="filtro_status_pers"
-        )
-
-    with col4:
-        deptos = sorted(df['DEPARTAMENTO'].dropna().unique().tolist())
-        depto_sel = st.multiselect(
-            "Departamento:",
-            options=deptos,
-            default=deptos,
-            key="filtro_depto_pers"
-        )
-
-    # Aplicar filtros
-    df_filtrado = df.copy()
-    
-    if cliente_sel:
-        df_filtrado = df_filtrado[df_filtrado['CLIENTE'].isin(cliente_sel)]
-    
-    if asesor_sel != 'Todos':
-        df_filtrado = df_filtrado[df_filtrado['ASESOR'].astype(str) == asesor_sel]
-    
-    if status_sel:
-        df_filtrado = df_filtrado[df_filtrado['STATUS'].isin(status_sel)]
-
-    if depto_sel:
-        df_filtrado = df_filtrado[df_filtrado['DEPARTAMENTO'].isin(depto_sel)]
-
-    if len(df_filtrado) == 0:
-        st.warning("No hay datos con los filtros seleccionados.")
-        return
-    
-    # KPIs filtrados
-    kpis = obtener_kpis_generales(df_filtrado)
-    
-    st.write(f"Mostrando **{len(df_filtrado):,}** órdenes de **{len(df):,}** totales")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Órdenes", f"{kpis['total_ordenes']:,}")
-    
-    with col2:
-        st.metric("Liquidadas", f"{kpis['total_liquidadas']:,}")
-    
-    with col3:
-        st.metric("Efectividad", f"{kpis['efectividad']:.1f}%")
-    
-    with col4:
-        st.metric("Valor", f"Q{kpis['valor_total']:,.0f}")
-    
-    st.markdown("---")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        fig = crear_grafico_status(df_filtrado)
-        st.plotly_chart(fig, use_container_width=True, key="chart_status_pers")
-    
-    with col2:
-        fig = crear_grafico_sub_status(df_filtrado)
-        st.plotly_chart(fig, use_container_width=True, key="chart_substatus_pers")
-    
-    # Tabla de datos filtrados
-    st.subheader("📋 Datos Filtrados")
-    st.dataframe(
-        df_filtrado[['ORDEN', 'CLIENTE', 'ASESOR', 'STATUS', 'SUB STATUS', 'EDAD_DIAS', 'VALOR_NUM', 'DEPARTAMENTO', 'GEO_KEY']],
-        use_container_width=True,
-        height=400
-    )
-    descargar_csv(df_filtrado, "datos_filtrados.csv", key="download_datos_filtrados")
+    descargar_csv(resumen, "resumen_valor.csv", key="dl_resumen_valor")
 
 
 # ============================================================================
-# APLICACIÓN PRINCIPAL
+# INTELIGENCIA DE MERCADO (PROPUESTAS MKT VIABLES)
+# ============================================================================
+
+def seccion_inteligencia_mercado(df):
+    """Modulos de Inteligencia de Mercado implementables con datos actuales."""
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "White Spaces", "Riesgo Competencia", "Perfil Logistico Cliente", "Penetracion por Asesor"
+    ])
+
+    with tab1:
+        # MKT #1: White Spaces
+        section_header("Mapa de White Spaces: Volumen vs Efectividad")
+        st.caption("Zonas con alto volumen + baja efectividad = mercado desatendido. Oportunidad de infraestructura logistica.")
+        ws = df.groupby('GEO_KEY').agg(
+            volumen=('ORDEN','count'),
+            efectividad=('ES_LIQUIDADO','mean'),
+            valor_total=('VALOR_NUM','sum')
+        ).reset_index()
+        ws['valor_perdido'] = df[~df['ES_LIQUIDADO']].groupby('GEO_KEY')['VALOR_NUM'].sum().reindex(ws['GEO_KEY']).fillna(0).values
+        ws['efectividad_pct'] = ws['efectividad'] * 100
+        ws['score_oportunidad'] = (ws['volumen'].rank(pct=True) * 0.6 + (1 - ws['efectividad']).rank(pct=True) * 0.4)
+        ws = ws.sort_values('score_oportunidad', ascending=False)
+
+        fig = px.scatter(ws, x='volumen', y='efectividad_pct', size='valor_perdido',
+                         color='score_oportunidad', hover_name='GEO_KEY',
+                         color_continuous_scale=[[0, WC['success']], [0.5, WC['warning']], [1, WC['danger']]],
+                         title="White Spaces: Zonas con Oportunidad Logistica",
+                         labels={'volumen':'Volumen de Ordenes', 'efectividad_pct':'Efectividad %', 'valor_perdido':'Valor Perdido (Q)'})
+        fig.add_hline(y=65, line_dash="dash", line_color=WC['success'], annotation_text="Meta 65%")
+        st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="ws_scatter")
+
+        top_ws = ws.head(10)
+        if len(top_ws) > 0:
+            alert_box(
+                f"Top oportunidad: {top_ws.iloc[0]['GEO_KEY']} con {int(top_ws.iloc[0]['volumen'])} ordenes, "
+                f"{top_ws.iloc[0]['efectividad_pct']:.0f}% efectividad y Q{top_ws.iloc[0]['valor_perdido']:,.0f} en valor perdido.",
+                "warning"
+            )
+        st.dataframe(top_ws[['GEO_KEY','volumen','efectividad_pct','valor_perdido','score_oportunidad']].round(2), use_container_width=True)
+        descargar_csv(ws, "white_spaces.csv", key="dl_ws")
+
+    with tab2:
+        # MKT #2: Riesgo Competencia
+        section_header("Senales de Riesgo Competitivo desde Sub-Status")
+        st.caption("Sub-status como 'NO HIZO PEDIDO', 'PRECIO INCORRECTO' o 'COMPRA OTRO PRODUCTO' son senales de mercado, no solo fallos operativos.")
+        df_rc = df[df['ES_RIESGO_COMPETENCIA']].copy()
+        n_total_rc = len(df_rc)
+        pct_rc = (n_total_rc / len(df) * 100) if len(df) > 0 else 0
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Ordenes con senal competitiva", f"{n_total_rc} ({pct_rc:.1f}%)")
+            rc_sub = df_rc['SUB STATUS'].value_counts().reset_index()
+            rc_sub.columns = ['SUB STATUS', 'Cantidad']
+            fig = px.bar(rc_sub, x='SUB STATUS', y='Cantidad', title="Distribucion de Senales Competitivas",
+                         color='Cantidad', color_continuous_scale='Reds')
+            st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="rc_bar")
+        with c2:
+            rc_zona = df_rc.groupby('GEO_KEY').size().reset_index(name='incidencias')
+            rc_zona = rc_zona.sort_values('incidencias', ascending=False).head(10)
+            fig = px.bar(rc_zona, y='GEO_KEY', x='incidencias', orientation='h',
+                         title="Top 10 Zonas con Riesgo Competitivo",
+                         color='incidencias', color_continuous_scale='Reds')
+            st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="rc_zona")
+
+        # Pricing signals (MKT #9)
+        df_precio = df[df['SUB STATUS'] == 'PRECIO INCORRECTO']
+        if len(df_precio) > 0:
+            alert_box(f"{len(df_precio)} ordenes rechazadas por PRECIO INCORRECTO. Revisar pricing en zonas afectadas.", "warning")
+
+    with tab3:
+        # MKT #4: Segmentacion por Perfil Logistico
+        section_header("Segmentacion de Clientes por Perfil Logistico")
+        st.caption("Clasifica clientes por costo de servicio: VIP (bajo costo, alta efectividad), Alto Costo (muchos reintentos), Estandar.")
+        pc = df.groupby('CLIENTE').agg(
+            ordenes=('ORDEN','count'),
+            efectividad=('ES_LIQUIDADO','mean'),
+            reprogramaciones=('STATUS', lambda x: (x=='REPROGRAMADO').mean()),
+            intentos_promedio=('NUM_INTENTOS','mean'),
+            valor_promedio=('VALOR_NUM','mean')
+        ).reset_index()
+
+        def clasificar(row):
+            if row['efectividad'] > 0.85 and row['intentos_promedio'] < 1.5:
+                return 'VIP LOGISTICO'
+            elif row['reprogramaciones'] > 0.15 or row['intentos_promedio'] > 2.5:
+                return 'ALTO COSTO'
+            else:
+                return 'ESTANDAR'
+
+        pc['PERFIL'] = pc.apply(clasificar, axis=1)
+        color_map = {'VIP LOGISTICO': WC['success'], 'ESTANDAR': WC['secondary'], 'ALTO COSTO': WC['danger']}
+
+        c1, c2 = st.columns(2)
+        with c1:
+            fig = px.scatter(pc, x='ordenes', y='efectividad', color='PERFIL', size='valor_promedio',
+                             hover_name='CLIENTE', color_discrete_map=color_map,
+                             title="Clientes por Perfil Logistico",
+                             labels={'ordenes':'Volumen','efectividad':'Efectividad'})
+            st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="perfil_scatter")
+        with c2:
+            perfil_resumen = pc.groupby('PERFIL').agg(
+                n_clientes=('CLIENTE','count'),
+                ordenes_total=('ordenes','sum'),
+                efectividad_media=('efectividad','mean'),
+                intentos_media=('intentos_promedio','mean')
+            ).reset_index()
+            perfil_resumen['efectividad_media'] = (perfil_resumen['efectividad_media'] * 100).round(1)
+            st.dataframe(perfil_resumen.round(2), use_container_width=True)
+
+        st.dataframe(pc.round(3), use_container_width=True)
+        descargar_csv(pc, "perfil_logistico_clientes.csv", key="dl_perfil")
+
+    with tab4:
+        # MKT #6: Penetracion por Asesor/Zona
+        section_header("Indice de Penetracion por Zona")
+        st.caption("Ordenes por asesor activo. Zonas con baja penetracion = fuerza de ventas ociosa o mercado sin explotar.")
+        pen = df.groupby('GEO_KEY').agg(
+            ordenes=('ORDEN','count'),
+            asesores=('ASESOR','nunique'),
+            valor=('VALOR_NUM','sum')
+        ).reset_index()
+        pen['ordenes_por_asesor'] = (pen['ordenes'] / pen['asesores']).round(1)
+        pen['valor_por_asesor'] = (pen['valor'] / pen['asesores']).round(0)
+        pen = pen.sort_values('ordenes_por_asesor', ascending=False)
+
+        fig = px.bar(pen.head(20), x='GEO_KEY', y='ordenes_por_asesor',
+                     title="Ordenes por Asesor por Zona (Top 20)",
+                     color='ordenes_por_asesor',
+                     color_continuous_scale=[[0, WC['danger']], [0.5, WC['warning']], [1, WC['success']]],
+                     text=[f"{o:.0f}" for o in pen.head(20)['ordenes_por_asesor']])
+        fig.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="pen_bar")
+        st.dataframe(pen.round(1), use_container_width=True)
+        descargar_csv(pen, "penetracion_zona.csv", key="dl_pen")
+
+
+def seccion_filtros_personalizados(df):
+    section_header("Dashboard Personalizado")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        clientes = sorted(df['CLIENTE'].dropna().unique().tolist())
+        cl_sel = st.multiselect("Cliente:", clientes, default=clientes, key="fp_cl")
+    with c2:
+        asesores = ['Todos'] + sorted(df['ASESOR'].astype(str).unique().tolist())
+        as_sel = st.selectbox("Asesor:", asesores, key="fp_as")
+    with c3:
+        status_list = sorted(df['STATUS'].dropna().unique().tolist())
+        st_sel = st.multiselect("Status:", status_list, default=status_list, key="fp_st")
+    with c4:
+        deptos = sorted(df['DEPARTAMENTO'].dropna().unique().tolist())
+        dp_sel = st.multiselect("Departamento:", deptos, default=deptos, key="fp_dp")
+
+    df_f = df.copy()
+    if cl_sel:
+        df_f = df_f[df_f['CLIENTE'].isin(cl_sel)]
+    if as_sel != 'Todos':
+        df_f = df_f[df_f['ASESOR'].astype(str) == as_sel]
+    if st_sel:
+        df_f = df_f[df_f['STATUS'].isin(st_sel)]
+    if dp_sel:
+        df_f = df_f[df_f['DEPARTAMENTO'].isin(dp_sel)]
+
+    if len(df_f) == 0:
+        st.warning("Sin datos con los filtros seleccionados.")
+        return
+
+    kpis = obtener_kpis_generales(df_f)
+    st.write(f"Mostrando **{len(df_f):,}** de **{len(df):,}** ordenes")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Ordenes", f"{kpis['total_ordenes']:,}")
+    with c2:
+        st.metric("Liquidadas", f"{kpis['total_liquidadas']:,}")
+    with c3:
+        st.metric("Efectividad (3+d)", f"{kpis['efectividad_cohorte']:.1f}%")
+    with c4:
+        st.metric("Valor", f"Q{kpis['valor_total']:,.0f}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(crear_grafico_status(df_f), use_container_width=True, key="fp_status")
+    with c2:
+        sub = df_f[df_f['SUB STATUS'].notna() & (df_f['SUB STATUS'] != '')]
+        if len(sub) > 0:
+            sc = sub['SUB STATUS'].value_counts().head(10)
+            fig = go.Figure(data=[go.Bar(y=sc.index, x=sc.values, orientation='h',
+                                         marker_color=WC['secondary'], text=sc.values, textposition='outside')])
+            fig.update_layout(title="Top 10 Sub-Status", height=400, margin=dict(l=220))
+            st.plotly_chart(aplicar_tema(fig), use_container_width=True, key="fp_sub")
+
+    st.dataframe(df_f[['ORDEN','CLIENTE','ASESOR','STATUS','SUB STATUS','EDAD_DIAS','VALOR_NUM','DEPARTAMENTO','GEO_KEY']].head(500),
+                 use_container_width=True, height=400)
+    descargar_csv(df_f, "datos_filtrados.csv", key="dl_fp")
+
+
+# ============================================================================
+# MAIN
 # ============================================================================
 
 def main():
-    st.title("Sistema de Control Logístico y Reportería")
-    st.markdown("*Dashboard de análisis operativo y estratégico*")
-    
-    # Inicializar estado
+    brand_header()
+
     if 'datos_cargados' not in st.session_state:
         st.session_state.datos_cargados = False
         st.session_state.df = None
-        st.session_state.errores = []
-        st.session_state.archivos_procesados = 0
-    
-    # Sidebar
+        st.session_state.calidad = {}
+        st.session_state.n_duplicados = 0
+
     with st.sidebar:
-        st.header("Carga de Archivos")
-        
-        archivos = st.file_uploader(
-            "Subir archivos CSV",
-            type=['csv'],
-            accept_multiple_files=True,
-            help="Puedes subir múltiples archivos CSV que serán consolidados"
-        )
-        
+        st.markdown(f"""
+        <div style="text-align:center; padding: 8px 0;">
+            <span style="font-size:1.3rem; font-weight:700; color:{WC['primary']};">WEBCORP</span>
+            <span style="font-size:0.9rem; color:{WC['text_muted']};"> Business</span>
+            <br><span style="font-size:0.65rem; color:{WC['text_muted']};">Inteligencia de Negocios</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.markdown("**Carga de Archivos**")
+        archivos = st.file_uploader("CSV de seguimiento", type=['csv'], accept_multiple_files=True,
+                                     help="Sube uno o mas archivos CSV. Se consolidaran automaticamente.")
         if archivos:
-            st.info(f"📎 {len(archivos)} archivo(s) seleccionado(s)")
-        
+            st.info(f"{len(archivos)} archivo(s)")
+
         procesar = st.button("Procesar Archivos", type="primary", disabled=not archivos)
-        
+
         if procesar and archivos:
             errores_estructura = []
-            errores_contenido = []
             dfs_validos = []
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
+            progress = st.progress(0)
+
             for i, archivo in enumerate(archivos):
-                status_text.text(f"Procesando: {archivo.name}")
-                progress_bar.progress((i + 1) / len(archivos))
-                
+                progress.progress((i+1) / len(archivos))
                 try:
                     df_temp = pd.read_csv(archivo, encoding='utf-8-sig')
                     df_temp = normalizar_columnas(df_temp)
-                    
-                    es_valido, mensaje = validar_estructura_csv(df_temp, archivo.name)
-                    
-                    if not es_valido:
-                        errores_estructura.append(mensaje)
+                    ok, msg, _ = validar_estructura_csv(df_temp, archivo.name)
+                    if not ok:
+                        errores_estructura.append(msg)
                         continue
-                    
-                    for idx, row in df_temp.iterrows():
-                        errores_fila = validar_contenido_fila(row, idx)
-                        for error in errores_fila:
-                            error['archivo'] = archivo.name
-                        errores_contenido.extend(errores_fila)
-                    
                     dfs_validos.append(df_temp)
-                    
                 except Exception as e:
-                    errores_estructura.append(f"❌ **{archivo.name}**: Error al leer el archivo - {str(e)}")
-            
-            progress_bar.empty()
-            status_text.empty()
-            
+                    errores_estructura.append(f"{archivo.name}: Error de lectura - {str(e)}")
+
+            progress.empty()
+
             if errores_estructura:
-                st.session_state.datos_cargados = False
-                st.session_state.errores = errores_estructura
-                st.session_state.tipo_error = 'estructura'
-            elif errores_contenido:
-                st.session_state.datos_cargados = False
-                st.session_state.errores = errores_contenido
-                st.session_state.tipo_error = 'contenido'
-            elif dfs_validos:
+                for err in errores_estructura:
+                    st.error(err)
+
+            if dfs_validos:
                 df_consolidado = pd.concat(dfs_validos, ignore_index=True)
-                df_consolidado = procesar_dataframe(df_consolidado)
-                
-                st.session_state.df = df_consolidado
+
+                # FIX: Deduplicacion automatica
+                n_antes = len(df_consolidado)
+                dupes = df_consolidado.duplicated(subset=['ORDEN'], keep=False)
+                if dupes.any():
+                    df_consolidado = df_consolidado.drop_duplicates(subset=['ORDEN'], keep='last')
+                n_duplicados = n_antes - len(df_consolidado)
+
+                # Modo permisivo: procesar todo
+                df_procesado, calidad = procesar_dataframe(df_consolidado)
+
+                st.session_state.df = df_procesado
                 st.session_state.datos_cargados = True
-                st.session_state.errores = []
-                st.session_state.archivos_procesados = len(dfs_validos)
-                
-                st.success(f" {len(dfs_validos)} archivo(s) procesado(s) correctamente")
-                st.info(f" Total de registros: {len(df_consolidado):,}")
-            else:
-                st.error("No se pudieron procesar los archivos.")
-        
-        # Filtros globales
+                st.session_state.calidad = calidad
+                st.session_state.n_duplicados = n_duplicados
+                st.session_state.archivos = len(dfs_validos)
+
+                st.success(f"{len(dfs_validos)} archivo(s) | {len(df_procesado):,} registros")
+                if n_duplicados > 0:
+                    st.warning(f"{n_duplicados} ordenes duplicadas removidas (se conservo la ultima version).")
+
+        # Filtro global de fechas
         if st.session_state.datos_cargados:
             st.markdown("---")
-            st.header("🔧 Filtros Globales")
-            
+            st.markdown("**Filtros Globales**")
             df = st.session_state.df
-            
             if df['FECHA_DT'].notna().any():
-                fecha_min = df['FECHA_DT'].min().date()
-                fecha_max = df['FECHA_DT'].max().date()
-                
-                rango_fechas = st.date_input(
-                    "Rango de fechas:",
-                    value=(fecha_min, fecha_max),
-                    min_value=fecha_min,
-                    max_value=fecha_max,
-                    key="filtro_fecha_global"
-                )
-                
-                if len(rango_fechas) == 2:
-                    st.session_state.filtro_fecha = rango_fechas
+                fmin = df['FECHA_DT'].min().date()
+                fmax = df['FECHA_DT'].max().date()
+                rango = st.date_input("Rango de fechas:", value=(fmin, fmax),
+                                       min_value=fmin, max_value=fmax, key="fg_fecha")
+                if len(rango) == 2:
+                    st.session_state.filtro_fecha = rango
 
-        st.markdown("""
-        <div style="text-align: center; padding: 1rem 0 2rem 0;">
-            <p style="color: #6b6b6b; font-size: 0.85rem; margin-top: 0.5rem;">
-                Powered by Steff 
+        st.markdown("---")
+        st.markdown(f"""
+        <div style="text-align:center; padding: 8px 0;">
+            <p style="color:{WC['text_muted']}; font-size:0.72rem;">
+                WebCorp Business BI<br>Guatemala
             </p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     # Contenido principal
-    if st.session_state.errores:
-        if st.session_state.get('tipo_error') == 'estructura':
-            st.error("### ❌ Errores Estructurales Detectados")
-            st.markdown("Los siguientes archivos tienen problemas de estructura y no pueden ser procesados:")
-            for error in st.session_state.errores:
-                st.markdown(error)
-            st.warning("⚠️ Corrija los archivos y vuelva a intentar.")
-        else:
-            seccion_errores(st.session_state.errores)
-    
-    elif st.session_state.datos_cargados:
+    if st.session_state.datos_cargados:
         df = st.session_state.df.copy()
-        
-        # Aplicar filtro de fecha
+
         if hasattr(st.session_state, 'filtro_fecha') and len(st.session_state.filtro_fecha) == 2:
-            fecha_inicio, fecha_fin = st.session_state.filtro_fecha
-            df = df[
-                (df['FECHA_DT'].dt.date >= fecha_inicio) & 
-                (df['FECHA_DT'].dt.date <= fecha_fin)
-            ]
-        
+            fi, ff = st.session_state.filtro_fecha
+            mask = df['FECHA_DT'].notna() & (df['FECHA_DT'].dt.date >= fi) & (df['FECHA_DT'].dt.date <= ff)
+            df = df[mask]
+
         if len(df) == 0:
-            st.warning("No hay datos en el rango de fechas seleccionado.")
+            st.warning("Sin datos en el rango seleccionado.")
             return
-        
+
+        # Reporte de calidad
+        seccion_calidad_datos(st.session_state.calidad, st.session_state.n_duplicados, 0, len(df))
+
         # Tabs principales
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "📊 Dashboard Principal",
-            "📈 Reportes",
-            "🚨 Alertas Avanzadas",
-            "🔍 Personalizado"
+        t1, t2, t3, t4 = st.tabs([
+            "Dashboard Principal", "Reportes Operativos",
+            "Inteligencia de Mercado", "Personalizado"
         ])
-        
-        with tab1:
+        with t1:
             seccion_dashboard_principal(df)
-        
-        with tab2:
+        with t2:
             seccion_reportes(df)
-        
-        with tab3:
-            seccion_alertas_avanzadas(df)
-        
-        with tab4:
+        with t3:
+            seccion_inteligencia_mercado(df)
+        with t4:
             seccion_filtros_personalizados(df)
-    
     else:
-        st.markdown("""
-        ### Bienvenido al Sistema de Control Logístico
-        
-        Este sistema te permite:
-        
-        - **Monitorear KPIs** de efectividad y rendimiento
-        - **Detectar alertas** operativas tempranas
-        - **Generar reportes** por cliente, asesor, zona y producto
-        - **Analizar valor económico** de las operaciones
-        - **Visualizar tendencias** temporales
-        
-        #### Para comenzar:
-        1. Sube uno o más archivos CSV en el panel lateral
-        2. Haz clic en "Procesar Archivos"
-        3. Explora los diferentes dashboards y reportes
-        
-        #### Columnas requeridas en el CSV:
-        """)
-        
+        st.markdown(f"""
+        <div style="text-align:center; padding: 60px 20px;">
+            <h2 style="color:{WC['primary']};">Sistema de Control Logistico e Inteligencia Operativa</h2>
+            <p style="color:{WC['text_muted']}; max-width:600px; margin:auto;">
+                Sube archivos CSV de seguimiento en el panel lateral para comenzar el analisis.
+                El sistema valida, limpia y analiza automaticamente tus datos.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        section_header("Columnas requeridas en el CSV")
         cols = st.columns(3)
-        for i, col in enumerate(COLUMNAS_OBLIGATORIAS):
-            cols[i % 3].markdown(f"- `{col}`")
+        for i, col_name in enumerate(COLUMNAS_OBLIGATORIAS):
+            cols[i % 3].code(col_name)
 
 
 if __name__ == "__main__":
