@@ -91,7 +91,7 @@ El archivo CSV debe contener **exactamente** las siguientes columnas:
 - RETORNO A SOLICITUD DE CC
 - RETORNADO A WEBCORP
 
-## 🔧 Instalación
+## Instalación
 
 ### Requisitos previos
 - Python 3.8 o superior
@@ -121,7 +121,7 @@ streamlit run app.py
 5. **Abrir en el navegador**
 La aplicación se abrirá automáticamente en `http://localhost:8501`
 
-## 📖 Uso
+## Uso
 
 1. **Cargar archivos**: Usa el panel lateral para subir uno o más archivos CSV
 2. **Procesar**: Haz clic en "Procesar Archivos"
@@ -152,8 +152,8 @@ Edad (días) = Fecha actual - FECHA de la orden
 ```
 
 ### Reglas visuales
-- Efectividad < 65% → 🔴 Rojo (requiere atención)
-- Efectividad ≥ 65% → 🟢 Verde (objetivo cumplido)
+- Efectividad < 65% → Rojo (requiere atención)
+- Efectividad ≥ 65% → Verde (objetivo cumplido)
 
 ## Estructura de archivos
 
